@@ -1,0 +1,133 @@
+name: TwoWheelBalance
+
+defaults:
+  - /base/env_base@_here_
+  - /base/sim_base@_here_
+
+env:
+  num_envs: 128
+  env_spacing: 4
+  max_episode_length: 600
+
+robot:
+  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.all_joints.usd
+  left_wheel_joint: Lwhl
+  right_wheel_joint: Rwhl
+  leg_joint_names: [L12, L45, R12, R45]
+  max_wheel_velocity: 12.0
+  action_smoothing: 0.34
+  action_rate_limit: 0.18
+  action_accel_limit: 0.045
+  wheel_velocity_sign: 1.0
+  leg_position_scale: 0.08
+  max_leg_velocity: 0.35
+  leg_action_smoothing: 0.10
+  leg_action_rate_limit: 0.025
+  lock_leg_actions: false
+
+  lock_passive_joints: true
+  leg_drive_stiffness: 120.0
+  leg_drive_damping: 12.0
+  leg_drive_max_force: 60.0
+  leg_drive_max_velocity: 4.0
+  passive_drive_stiffness: 500.0
+  passive_drive_damping: 20.0
+  passive_drive_max_force: 80.0
+  passive_drive_max_velocity: 4.0
+ground:
+  static_friction: 1.2
+  dynamic_friction: 1.0
+  restitution: 0.0
+
+time_encoding: true
+stats_alpha: 0.8
+
+reset_height: 0.088
+min_height: 0.035
+max_init_roll: 0.025
+max_init_pitch: 0.012
+termination_roll: 0.62
+termination_pitch: 0.76
+max_xy: 2.0
+
+# Keep robustness, but avoid training an overly nervous recovery policy.
+push_interval: 3.0
+kick_velocity_min: 0.05
+kick_velocity_max: 0.30
+kick_pitch_rate_min: 0.12
+kick_pitch_rate_max: 0.75
+push_warmup_steps: 70
+drop_reset_prob: 0.12
+drop_height_min: 0.10
+drop_height_max: 0.22
+reset_lin_vel_x: 0.10
+reset_pitch_rate: 0.42
+
+forward_axis_sign: -1.0
+min_command_vx: 0.0
+max_command_vx: 0.0
+command_vx_sign: 1.0
+command_bidirectional: false
+command_pitch_gain: 0.0
+command_pitch_limit: 0.0
+command_pitch_sign: 1.0
+wheel_command_bias: 0.0
+wheel_command_bias_sign: 1.0
+max_command_yaw_rate: 0.0
+eval_command_vx: 0.0
+eval_command_yaw_rate: 0.0
+
+reward_alive_weight: 0.3
+reward_stand_weight: 12.0
+reward_upright_weight: 5.0
+reward_height_weight: 2.0
+reward_velocity_weight: 0.8
+reward_direction_weight: 0.0
+reward_forward_progress_weight: 0.0
+reward_displacement_progress_weight: 0.0
+penalty_forward_deficit_weight: 0.0
+penalty_speed_shortfall_weight: 0.0
+reward_position_weight: 4.0
+reward_yaw_weight: 5.0
+reward_yaw_rate_weight: 2.5
+reward_settle_weight: 8.0
+penalty_fall_weight: 20.0
+penalty_roll_weight: 16.0
+penalty_roll_rate_weight: 1.4
+penalty_pitch_weight: 2.0
+penalty_pitch_rate_weight: 0.25
+penalty_yaw_weight: 20.0
+penalty_yaw_rate_weight: 10.0
+penalty_position_weight: 22.0
+penalty_lateral_velocity_weight: 6.0
+penalty_lin_vel_z_weight: 1.0
+penalty_action_diff_weight: 1.4
+penalty_wheel_vel_diff_weight: 3.0
+penalty_wheel_speed_weight: 1.2
+penalty_action_weight: 0.006
+penalty_smoothness_weight: 0.85
+penalty_action_accel_weight: 0.90
+reward_leg_neutral_weight: 1.5
+penalty_leg_pos_weight: 0.75
+penalty_leg_vel_weight: 0.35
+penalty_leg_action_weight: 0.18
+penalty_leg_action_diff_weight: 0.35
+
+# Wheel-Legged-Gym style standing terms adapted to this USD/action interface.
+wl_tracking_sigma: 0.0060
+wl_tracking_ang_sigma: 0.08
+wl_height_sigma: 0.0015
+wl_tracking_lin_vel_weight: 5.0
+wl_tracking_lin_vel_enhance_weight: 0.0
+wl_tracking_ang_vel_weight: 2.5
+wl_base_height_weight: 3.0
+wl_orientation_weight: -24.0
+wl_lin_vel_z_weight: -2.0
+wl_ang_vel_xy_weight: -1.1
+wl_dof_vel_weight: -0.06
+wl_dof_acc_weight: -0.0000004
+wl_action_rate_weight: -1.15
+wl_action_smooth_weight: -1.35
+wl_nominal_state_weight: -0.70
+
+action_transform: null

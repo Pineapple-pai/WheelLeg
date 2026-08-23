@@ -1,0 +1,20 @@
+hydra:
+  searchpath:
+    - file://../cfg
+
+headless: true
+sim: ${task.sim}
+env: ${task.env}
+seed: 0
+
+viewer:
+  resolution: [960, 720]
+  eye: [8, 0., 6.]
+  lookat: [0., 0., 1.]
+
+wandb:
+  mode: disabled
+
+defaults:
+  - task: TwoWheelBalance
+  - _self_

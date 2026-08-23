@@ -1,0 +1,1 @@
+controller_joint_names: ['', 'Lcrank', 'L12', 'LL', 'Lcal', 'Lwhl', 'L45', 'L234', 'RL', 'Rcal', 'Rwhl', 'R45', 'R234', 'R12', 'Yaw', 'P12', 'P', 'P23', ]
