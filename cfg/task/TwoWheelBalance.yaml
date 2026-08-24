@@ -7,23 +7,37 @@ defaults:
 env:
   num_envs: 128
   env_spacing: 4
-  max_episode_length: 500
+  max_episode_length: 1000
 
 robot:
-  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.rcrank.usd
+  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.all_joints.usd
   left_wheel_joint: Lwhl
   right_wheel_joint: Rwhl
-  leg_joint_names: [LL, Lcal, RL, Rcal]
-  max_wheel_velocity: 24.0
-  action_smoothing: 0.58
-  action_rate_limit: 0.45
+  # The exported URDF is an open CAD tree: L12/L45/R12/R45 are not in the
+  # wheel support chains. Stage 1/2 therefore train wheel control only.
+  leg_joint_names: []
+  max_wheel_velocity: 20.0
+  # Measured from the exported wheel STL. Positive joint rotation about world
+  # +X corresponds to negative body +Y velocity under no-slip rolling.
+  wheel_radius: 0.06
+  wheel_rolling_sign: -1.0
+  action_smoothing: 0.44
+  action_rate_limit: 0.30
   action_accel_limit: 0.0
+  wheel_action_decimation: 1
+  wheel_action_deadband: 0.0
+  wheel_action_hold_threshold: 0.0
   wheel_velocity_sign: 1.0
-  leg_position_scale: 0.18
+  # Velocity drives require zero stiffness and finite damping/torque.
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 4.0
+  wheel_drive_max_force: 12.0
+  wheel_drive_max_velocity: 20.0
+  leg_position_scale: 0.10
   max_leg_velocity: 0.45
-  leg_action_smoothing: 0.08
-  leg_action_rate_limit: 0.025
-  lock_leg_actions: false
+  leg_action_smoothing: 0.14
+  leg_action_rate_limit: 0.035
+  lock_leg_actions: true
 
   lock_passive_joints: true
   leg_drive_stiffness: 120.0
@@ -41,34 +55,58 @@ ground:
 
 time_encoding: true
 stats_alpha: 0.8
+train_stage: stand
 
-reset_height: 0.14
-min_height: 0.105
-max_init_roll: 0.01
-max_init_pitch: 0.005
-termination_roll: 0.18
-termination_pitch: 0.25
-max_xy: 5.0
+# The imported wheel geometry settles with the base at about 0.083 m. Starting
+# close to contact avoids injecting a 5 cm drop into every episode reset.
+reset_height: 0.084
+# Height alone cannot distinguish upright from a body resting on the ground;
+# roll/pitch termination provides the primary fall gate.
+min_height: 0.075
+reset_roll: 0.0
+reset_pitch: 0.0
+roll_target: 0.0
+max_init_roll: 0.005
+max_init_pitch: 0.003
+termination_roll: 0.22
+termination_pitch: 0.30
+max_xy: 2.0
 
-# Deploy-oriented safe-motion setup: keep standing as the dominant task while
-# sampling small bidirectional velocity commands. Speed rewards are gated by a
-# valid standing posture in the task code.
-forward_axis_sign: -1.0
-min_command_vx: 0.05
-max_command_vx: 0.10
+# Stage 1 default: zero-speed standing. Stage 2 can override train_stage=move
+# and enable the reward/command curricula below while loading a stage-1 checkpoint.
+# Both wheel axes are world +X, so their rolling/forward direction is world +Y.
+forward_axis_sign: 1.0
+lin_vel_range: [0.0, 0.0]
+min_command_vx: 0.0
+max_command_vx: 0.0
 command_vx_sign: 1.0
-command_bidirectional: true
-command_zero_prob: 0.45
+command_bidirectional: false
+command_zero_prob: 0.0
 command_active_vx: 0.004
-command_pitch_gain: 0.0
-command_pitch_limit: 0.0
-command_pitch_sign: 1.0
-wheel_command_bias: 0.10
+command_balance_gain: 0.3
+command_balance_limit: 0.3
+# Positive +Y velocity requires a negative roll (top of body leans +Y).
+command_balance_sign: -1.0
+wheel_command_bias: 0.0
 wheel_command_bias_sign: 1.0
 max_command_yaw_rate: 0.0
 eval_command_vx: 0.0
 eval_move_command_vx: 0.08
 eval_command_yaw_rate: 0.0
+
+command_curriculum_enabled: false
+command_curriculum_start_frame: 0
+command_curriculum_end_frame: 1_000_000
+lin_vel_curriculum_start: [-0.2, 0.2]
+lin_vel_curriculum_end: [-0.8, 0.8]
+
+reward_anneal_enabled: false
+reward_anneal_start_frame: 500_000
+reward_anneal_end_frame: 1_000_000
+tracking_lin_vel_multiplier_start: 0.1
+tracking_lin_vel_multiplier_end: 1.0
+posture_multiplier_start: 1.0
+posture_multiplier_end: 0.1
 
 reward_alive_weight: 1.0
 reward_stand_weight: 30.0
@@ -84,47 +122,55 @@ reward_position_weight: 0.0
 reward_yaw_weight: 0.0
 reward_yaw_rate_weight: 0.0
 reward_settle_weight: 10.0
-penalty_fall_weight: 60.0
-penalty_roll_weight: 350.0
-penalty_roll_rate_weight: 24.0
-penalty_pitch_weight: 90.0
-penalty_pitch_rate_weight: 10.0
-penalty_yaw_weight: 8.0
-penalty_yaw_rate_weight: 4.0
-penalty_position_weight: 22.0
-penalty_lateral_velocity_weight: 12.0
+penalty_fall_weight: 80.0
+penalty_roll_weight: 220.0
+penalty_roll_rate_weight: 8.0
+penalty_pitch_weight: 60.0
+penalty_pitch_rate_weight: 4.0
+penalty_yaw_weight: 28.0
+penalty_yaw_rate_weight: 6.0
+penalty_position_weight: 42.0
+penalty_lateral_velocity_weight: 8.0
 penalty_lin_vel_z_weight: 1.0
-penalty_action_diff_weight: 1.20
-penalty_wheel_vel_diff_weight: 5.00
-penalty_wheel_speed_weight: 0.050
+penalty_action_diff_weight: 1.2
+penalty_wheel_vel_diff_weight: 4.6
+penalty_wheel_speed_weight: 1.3
+penalty_wheel_delta_weight: 12.0
+penalty_wheel_common_delta_weight: 18.0
+penalty_wheel_diff_delta_weight: 8.0
+penalty_wheel_sign_flip_weight: 0.32
+penalty_wheel_action_diff_weight: 5.5
+penalty_wheel_action_accel_weight: 2.0
+penalty_wheel_action_magnitude_weight: 0.18
+penalty_quiet_wheel_weight: 1.0
 penalty_action_weight: 0.002
-penalty_smoothness_weight: 0.45
-penalty_action_accel_weight: 0.32
-reward_leg_neutral_weight: 0.3
-penalty_leg_pos_weight: 0.0
-penalty_leg_vel_weight: 0.04
-penalty_leg_action_weight: 0.025
-penalty_leg_action_diff_weight: 0.18
+penalty_smoothness_weight: 0.70
+penalty_action_accel_weight: 0.15
+reward_leg_neutral_weight: 1.2
+penalty_leg_pos_weight: 0.55
+penalty_leg_vel_weight: 0.25
+penalty_leg_action_weight: 0.12
+penalty_leg_action_diff_weight: 0.28
 
 # Wheel-Legged-Gym style rewards, adapted to this USD/action interface.
-wl_tracking_sigma: 0.0010
-wl_tracking_ang_sigma: 0.03
-wl_height_sigma: 0.001
-wl_tracking_lin_vel_weight: 35.0
+wl_tracking_sigma: 0.0045
+wl_tracking_ang_sigma: 0.12
+wl_height_sigma: 0.0012
+wl_tracking_lin_vel_weight: 7.0
 wl_tracking_lin_vel_enhance_weight: 0.0
-wl_tracking_ang_vel_weight: 10.0
+wl_tracking_ang_vel_weight: 1.5
 wl_base_height_weight: 3.0
-wl_orientation_weight: -35.0
+wl_orientation_weight: -42.0
 wl_lin_vel_z_weight: -2.0
-wl_ang_vel_xy_weight: -2.0
-wl_dof_vel_weight: -0.02
-wl_dof_acc_weight: -0.00000025
-wl_action_rate_weight: -0.80
-wl_action_smooth_weight: -0.60
-wl_nominal_state_weight: -0.20
+wl_ang_vel_xy_weight: -0.25
+wl_dof_vel_weight: -0.04
+wl_dof_acc_weight: -0.0000003
+wl_action_rate_weight: -0.25
+wl_action_smooth_weight: -0.30
+wl_nominal_state_weight: -0.50
 
-reward_tracking_lin_vel_weight: 28.0
-reward_tracking_lin_vel_enhance_weight: 8.0
+reward_tracking_lin_vel_weight: 1.0
+reward_tracking_lin_vel_enhance_weight: 0.0
 reward_tracking_ang_vel_weight: 3.0
 reward_tracking_ang_vel_enhance_weight: 3.0
 reward_base_height_weight: 1.0
@@ -140,15 +186,25 @@ reward_action_smooth_weight: -0.05
 reward_collision_weight: -5.0
 reward_dof_pos_limits_weight: -1.0
 tracking_sigma: 0.01
-base_height_target: 0.118
-height_floor: 0.09
+base_height_target: 0.083
+height_floor: 0.078
 penalty_low_height_weight: 160.0
 soft_dof_pos_limit: 0.97
 max_contact_force: 20.0
 terminate_on_body_contact: false
 contact_terminate_force_threshold: 5.0
-# Joint order: LL, Lcal, RL, Rcal. Medium-low stand: lower than the high
-# standing pose, but high enough that lying on the chassis is no longer valid.
-stand_joint_pos: [-0.2, 0.28, -0.2, -0.28]
+# Diagnostic only. Isaac 4.0 does not expose reliable per-link contact forces
+# for this articulation, and height overlaps between upright and fallen poses.
+body_contact_height: 0.081
+upright_roll_rate_scale: 0.16
+upright_pitch_rate_scale: 0.06
+settle_roll_rate_scale: 0.10
+settle_pitch_rate_scale: 0.08
+settle_wheel_delta_scale: 5.4
+settle_wheel_common_delta_scale: 8.8
+settle_wheel_diff_delta_scale: 2.4
+
+# No leg DOF is exposed until a closed-loop actuator mapping is available.
+stand_joint_pos: []
 
 action_transform: null

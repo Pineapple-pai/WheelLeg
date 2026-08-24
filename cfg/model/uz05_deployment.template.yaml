@@ -1,0 +1,129 @@
+schema_version: 1
+
+source:
+  assembly: /home/p/下载/UZ-05-open总装/串联腿装配方案2.SLDASM
+  solidworks_configuration: REQUIRED
+  components_csv: REQUIRED
+  mates_csv: REQUIRED
+  geometry_step: REQUIRED
+  mass_report: REQUIRED
+
+frames:
+  convention: x_forward_y_left_z_up
+  base_link: REQUIRED
+  imu_link: REQUIRED
+  imu_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+  imu_rpy_rad: [REQUIRED, REQUIRED, REQUIRED]
+
+kinematics:
+  mechanism: closed_loop
+  left:
+    hip_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    knee_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    wheel_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    closure_pivots_xyz_m: REQUIRED
+    assembly_branch: REQUIRED
+    hard_stop_rad: [REQUIRED, REQUIRED]
+  right:
+    hip_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    knee_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    wheel_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+    closure_pivots_xyz_m: REQUIRED
+    assembly_branch: REQUIRED
+    hard_stop_rad: [REQUIRED, REQUIRED]
+
+actuators:
+  left_hip:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+  left_knee:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+  right_hip:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+  right_knee:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+  left_wheel:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+  right_wheel:
+    motor_model: REQUIRED
+    reduction: REQUIRED
+    direction: REQUIRED
+    encoder_zero_rad: REQUIRED
+    velocity_limit_rad_s: REQUIRED
+    continuous_torque_nm: REQUIRED
+    peak_torque_nm: REQUIRED
+    peak_duration_s: REQUIRED
+    current_limit_a: REQUIRED
+    temperature_limit_c: REQUIRED
+
+contact:
+  wheel_radius_m: REQUIRED
+  wheel_width_m: REQUIRED
+  longitudinal_static_friction: REQUIRED
+  longitudinal_dynamic_friction: REQUIRED
+  lateral_static_friction: REQUIRED
+  lateral_dynamic_friction: REQUIRED
+  restitution: REQUIRED
+
+control:
+  policy_rate_hz: REQUIRED
+  motor_control_rate_hz: REQUIRED
+  observation_latency_s: REQUIRED
+  action_latency_s: REQUIRED
+  emergency_stop_timeout_s: REQUIRED
+
+mass_properties:
+  total_mass_kg: REQUIRED
+  base_com_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
+  base_inertia_kg_m2: [REQUIRED, REQUIRED, REQUIRED, REQUIRED, REQUIRED, REQUIRED]
+  moving_links: REQUIRED
+
+safety:
+  max_jump_height_m: REQUIRED
+  max_landing_force_n: REQUIRED
+  max_bus_power_w: REQUIRED
+  hardware_test_requires_support_rig: true

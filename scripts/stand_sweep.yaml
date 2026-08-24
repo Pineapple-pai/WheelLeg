@@ -1,6 +1,6 @@
 hydra:
   searchpath:
-    - file://../cfg
+    - file:///home/p/下载/WheelLeg/cfg
 
 headless: true
 sim: ${task.sim}

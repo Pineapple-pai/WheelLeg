@@ -40,26 +40,46 @@ TRACKED_TRAIN_KEYS = (
     "reward",
     "stats.uprightness",
     "stats.roll_error",
+    "stats.roll_rate_error",
     "stats.pitch_error",
+    "stats.pitch_target",
+    "stats.pitch_tracking_error",
+    "stats.pitch_rate_error",
     "stats.yaw_error",
+    "stats.yaw_rate_error",
     "stats.height",
     "stats.height_error",
     "stats.terminated_roll",
     "stats.terminated_pitch",
     "stats.terminated_height",
     "stats.terminated_xy",
+    "stats.terminated_nan",
+    "stats.done",
     "stats.forward_velocity",
     "stats.velocity_error",
     "stats.forward_progress",
     "stats.displacement_progress",
     "stats.position_error",
     "stats.velocity_alignment",
+    "stats.wheel_speed",
+    "stats.wheel_vel_diff",
+    "stats.wheel_delta",
+    "stats.wheel_action_diff",
+    "stats.wheel_action_acceleration",
+    "stats.wheel_action_magnitude",
+    "stats.leg_pos_error",
+    "stats.leg_vel_error",
+    "stats.leg_action_magnitude",
+    "stats.leg_action_diff",
     "stats.quiet_state",
     "stats.stand_reward",
     "stats.settle_reward",
     "stats.leg_neutral_reward",
     "stats.command_vx",
     "stats.command_yaw_rate",
+    "stats.anneal_progress",
+    "stats.tracking_multiplier",
+    "stats.posture_multiplier",
 )
 
 TRACKED_UPDATE_KEYS = (
@@ -81,6 +101,8 @@ TRACKED_EVAL_KEYS = (
     "eval/stats.terminated_pitch",
     "eval/stats.terminated_height",
     "eval/stats.terminated_xy",
+    "eval/stats.terminated_nan",
+    "eval/stats.done",
     "eval/stats.forward_velocity",
     "eval/stats.velocity_error",
     "eval/stats.quiet_state",
@@ -190,6 +212,7 @@ def _compact_summary(cfg, total_frames, max_iters, eval_interval, save_interval,
     checkpoint_version = str(cfg.get("checkpoint_version", "v1"))
     fields = [
         ("task", cfg.task.name),
+        ("train_stage", cfg.task.get("train_stage", "stand")),
         ("algo", cfg.algo.name),
         ("headless", cfg.headless),
         ("num_envs", cfg.task.env.num_envs),
@@ -388,8 +411,12 @@ def main(cfg):
         return info
 
     env.train()
+    if hasattr(base_env, "set_training_progress"):
+        base_env.set_training_progress(0)
     start_time = time.time()
     for i, data in enumerate(collector):
+        if hasattr(base_env, "set_training_progress"):
+            base_env.set_training_progress(collector._frames)
         elapsed = max(time.time() - start_time, 1e-6)
         info = {
             "env_frames": collector._frames,
@@ -411,13 +438,13 @@ def main(cfg):
         update_info = policy.train_op(data.to_tensordict())
         info.update(update_info)
 
-        if eval_interval > 0 and i % eval_interval == 0:
+        if eval_interval > 0 and (i + 1) % eval_interval == 0:
             logging.info(f"Eval at {collector._frames} steps.")
             info.update(evaluate_commands())
             env.train()
             base_env.train()
 
-        if save_interval > 0 and i % save_interval == 0:
+        if save_interval > 0 and (i + 1) % save_interval == 0:
             try:
                 ckpt_path = _checkpoint_path(cfg, f"checkpoint_{collector._frames}.pt")
                 torch.save(policy.state_dict(), ckpt_path)

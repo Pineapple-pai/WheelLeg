@@ -90,6 +90,45 @@ class TwoWheelBalance(IsaacEnv):
         self.reward_action_smooth_weight = float(cfg.task.get("reward_action_smooth_weight", -0.05))
         self.reward_collision_weight = float(cfg.task.get("reward_collision_weight", -1.0))
         self.reward_dof_pos_limits_weight = float(cfg.task.get("reward_dof_pos_limits_weight", -1.0))
+        self.train_stage = str(cfg.task.get("train_stage", "stand")).lower()
+        default_lin_vel_range = [
+            float(cfg.task.get("min_command_vx", 0.0)),
+            float(cfg.task.get("max_command_vx", 0.0)),
+        ]
+        self.lin_vel_range = list(cfg.task.get("lin_vel_range", default_lin_vel_range))
+        if len(self.lin_vel_range) != 2:
+            raise ValueError("lin_vel_range must be [min, max].")
+        self.lin_vel_range = [float(self.lin_vel_range[0]), float(self.lin_vel_range[1])]
+        self.command_curriculum_enabled = (
+            bool(cfg.task.get("command_curriculum_enabled", False))
+            or self.train_stage == "move"
+        )
+        self.command_curriculum_start_frame = int(cfg.task.get("command_curriculum_start_frame", 0))
+        self.command_curriculum_end_frame = int(cfg.task.get("command_curriculum_end_frame", 1_000_000))
+        self.lin_vel_curriculum_start = list(cfg.task.get("lin_vel_curriculum_start", self.lin_vel_range))
+        self.lin_vel_curriculum_end = list(cfg.task.get("lin_vel_curriculum_end", self.lin_vel_range))
+        self.lin_vel_curriculum_start = [
+            float(self.lin_vel_curriculum_start[0]),
+            float(self.lin_vel_curriculum_start[1]),
+        ]
+        self.lin_vel_curriculum_end = [
+            float(self.lin_vel_curriculum_end[0]),
+            float(self.lin_vel_curriculum_end[1]),
+        ]
+        self.reward_anneal_enabled = (
+            bool(cfg.task.get("reward_anneal_enabled", False))
+            or self.train_stage == "move"
+        )
+        self.reward_anneal_start_frame = int(cfg.task.get("reward_anneal_start_frame", 500_000))
+        self.reward_anneal_end_frame = int(cfg.task.get("reward_anneal_end_frame", 1_000_000))
+        self.tracking_lin_vel_multiplier_start = float(cfg.task.get("tracking_lin_vel_multiplier_start", 0.1))
+        self.tracking_lin_vel_multiplier_end = float(cfg.task.get("tracking_lin_vel_multiplier_end", 1.0))
+        self.posture_multiplier_start = float(cfg.task.get("posture_multiplier_start", 1.0))
+        self.posture_multiplier_end = float(cfg.task.get("posture_multiplier_end", 0.1))
+        self._global_frames = 0
+        self._anneal_progress = 0.0
+        self._tracking_lin_vel_multiplier = 1.0
+        self._posture_multiplier = 1.0
         self.tracking_sigma = float(cfg.task.get("tracking_sigma", 0.25))
         self.base_height_target = float(cfg.task.get("base_height_target", 0.18))
         self.height_floor = float(cfg.task.get("height_floor", self.base_height_target - 0.01))
@@ -99,6 +138,9 @@ class TwoWheelBalance(IsaacEnv):
         self.terminate_on_body_contact = bool(cfg.task.get("terminate_on_body_contact", True))
         self.contact_terminate_force_threshold = float(
             cfg.task.get("contact_terminate_force_threshold", self.max_contact_force)
+        )
+        self.body_contact_height = float(
+            cfg.task.get("body_contact_height", self.height_floor - 0.002)
         )
         self.upright_roll_rate_scale = float(cfg.task.get("upright_roll_rate_scale", 1.5))
         self.upright_pitch_rate_scale = float(cfg.task.get("upright_pitch_rate_scale", 0.5))
@@ -110,16 +152,25 @@ class TwoWheelBalance(IsaacEnv):
 
         self.max_init_roll = cfg.task.max_init_roll
         self.max_init_pitch = cfg.task.max_init_pitch
-        self.min_command_vx = cfg.task.min_command_vx
-        self.max_command_vx = cfg.task.max_command_vx
-        self.forward_axis_sign = cfg.task.forward_axis_sign
+        self.reset_roll = float(cfg.task.get("reset_roll", 0.0))
+        self.reset_pitch = float(cfg.task.get("reset_pitch", 0.0))
+        self.roll_target = float(cfg.task.get("roll_target", 0.0))
+        self.min_command_vx = float(cfg.task.get("min_command_vx", self.lin_vel_range[0]))
+        self.max_command_vx = float(cfg.task.get("max_command_vx", self.lin_vel_range[1]))
+        self.forward_axis_sign = float(cfg.task.forward_axis_sign)
         self.command_vx_sign = cfg.task.command_vx_sign
         self.command_bidirectional = cfg.task.command_bidirectional
         self.command_zero_prob = float(cfg.task.get("command_zero_prob", 0.0))
         self.command_active_vx = float(cfg.task.get("command_active_vx", 0.015))
-        self.command_pitch_gain = cfg.task.command_pitch_gain
-        self.command_pitch_limit = cfg.task.command_pitch_limit
-        self.command_pitch_sign = cfg.task.command_pitch_sign
+        self.command_balance_gain = float(
+            cfg.task.get("command_balance_gain", cfg.task.get("command_pitch_gain", 0.0))
+        )
+        self.command_balance_limit = float(
+            cfg.task.get("command_balance_limit", cfg.task.get("command_pitch_limit", 0.0))
+        )
+        self.command_balance_sign = float(
+            cfg.task.get("command_balance_sign", cfg.task.get("command_pitch_sign", 1.0))
+        )
         self.wheel_command_bias = cfg.task.wheel_command_bias
         self.wheel_command_bias_sign = cfg.task.wheel_command_bias_sign
         self.max_command_yaw_rate = cfg.task.max_command_yaw_rate
@@ -136,18 +187,31 @@ class TwoWheelBalance(IsaacEnv):
         self.push_interval = float(cfg.task.get("push_interval", 0.0))
         self.kick_velocity_min = float(cfg.task.get("kick_velocity_min", cfg.task.get("push_force_min", 0.0)))
         self.kick_velocity_max = float(cfg.task.get("kick_velocity_max", cfg.task.get("push_force_max", 0.0)))
-        self.kick_pitch_rate_min = float(cfg.task.get("kick_pitch_rate_min", 0.0))
-        self.kick_pitch_rate_max = float(cfg.task.get("kick_pitch_rate_max", 0.0))
+        self.kick_balance_rate_min = float(
+            cfg.task.get("kick_balance_rate_min", cfg.task.get("kick_pitch_rate_min", 0.0))
+        )
+        self.kick_balance_rate_max = float(
+            cfg.task.get("kick_balance_rate_max", cfg.task.get("kick_pitch_rate_max", 0.0))
+        )
         self.push_warmup_steps = int(cfg.task.get("push_warmup_steps", 0))
         self.drop_reset_prob = float(cfg.task.get("drop_reset_prob", 0.0))
         self.drop_height_min = float(cfg.task.get("drop_height_min", self.reset_height))
         self.drop_height_max = float(cfg.task.get("drop_height_max", self.reset_height))
-        self.reset_lin_vel_x = float(cfg.task.get("reset_lin_vel_x", 0.0))
-        self.reset_pitch_rate = float(cfg.task.get("reset_pitch_rate", 0.0))
+        self.reset_forward_velocity = float(
+            cfg.task.get("reset_forward_velocity", cfg.task.get("reset_lin_vel_x", 0.0))
+        )
+        self.reset_balance_rate = float(
+            cfg.task.get("reset_balance_rate", cfg.task.get("reset_pitch_rate", 0.0))
+        )
 
         super().__init__(cfg, headless)
 
         self.robot.initialize()
+        if self.stand_joint_pos.numel() != self.robot.num_leg_joints:
+            raise ValueError(
+                "stand_joint_pos length must match robot.leg_joint_names: "
+                f"{self.stand_joint_pos.numel()} != {self.robot.num_leg_joints}"
+            )
         self.dof_limits = self.robot._view.get_dof_limits().to(self.device)
         body_indices = getattr(self.robot._view, "_body_indices", {})
         self.collision_body_indices = torch.tensor(
@@ -162,7 +226,7 @@ class TwoWheelBalance(IsaacEnv):
         self.init_joint_vel = torch.zeros_like(self.robot.get_joint_velocities()).to(self.device)
 
         self.command = torch.zeros(self.num_envs, 1, 2, device=self.device)
-        self.prev_x = torch.zeros(self.num_envs, 1, device=self.device)
+        self.prev_forward_pos = torch.zeros(self.num_envs, 1, device=self.device)
         self.prev_leg_vel = torch.zeros_like(self.robot.leg_vel)
         self.prev_wheel_vel = torch.zeros_like(self.robot.wheel_vel)
         self.push_prob = 0.0
@@ -178,6 +242,59 @@ class TwoWheelBalance(IsaacEnv):
             torch.tensor([-self.max_command_yaw_rate], device=self.device),
             torch.tensor([self.max_command_yaw_rate], device=self.device),
         )
+
+    def set_training_progress(self, frames: int):
+        self._global_frames = max(0, int(frames))
+        self._anneal_progress = self._linear_schedule(
+            self._global_frames,
+            self.reward_anneal_start_frame,
+            self.reward_anneal_end_frame,
+        )
+        if self.reward_anneal_enabled:
+            self._tracking_lin_vel_multiplier = self._lerp(
+                self.tracking_lin_vel_multiplier_start,
+                self.tracking_lin_vel_multiplier_end,
+                self._anneal_progress,
+            )
+            self._posture_multiplier = self._lerp(
+                self.posture_multiplier_start,
+                self.posture_multiplier_end,
+                self._anneal_progress,
+            )
+        else:
+            self._tracking_lin_vel_multiplier = 1.0
+            self._posture_multiplier = 1.0
+
+    @staticmethod
+    def _linear_schedule(value: int, start: int, end: int) -> float:
+        if end <= start:
+            return 1.0 if value >= end else 0.0
+        return max(0.0, min(1.0, (float(value) - float(start)) / float(end - start)))
+
+    @staticmethod
+    def _lerp(start: float, end: float, progress: float) -> float:
+        return float(start) + (float(end) - float(start)) * float(progress)
+
+    def _current_lin_vel_range(self):
+        if not self.command_curriculum_enabled:
+            return self.lin_vel_range
+        progress = self._linear_schedule(
+            self._global_frames,
+            self.command_curriculum_start_frame,
+            self.command_curriculum_end_frame,
+        )
+        return [
+            self._lerp(self.lin_vel_curriculum_start[0], self.lin_vel_curriculum_end[0], progress),
+            self._lerp(self.lin_vel_curriculum_start[1], self.lin_vel_curriculum_end[1], progress),
+        ]
+
+    def _lin_vel_command_scale(self):
+        values = self.lin_vel_curriculum_end if self.command_curriculum_enabled else self.lin_vel_range
+        return max(abs(values[0]), abs(values[1]), 1e-6)
+
+    def _has_lin_vel_command(self):
+        low, high = self._current_lin_vel_range()
+        return abs(high - low) > 1e-6 or abs(low) > 1e-6
 
     def _get_contact_penalty(self, threshold: float = None):
         if self.collision_body_indices.numel() == 0:
@@ -311,6 +428,7 @@ class TwoWheelBalance(IsaacEnv):
             "episode_len": UnboundedContinuousTensorSpec(1, device=self.device),
             "uprightness": UnboundedContinuousTensorSpec(1, device=self.device),
             "roll_error": UnboundedContinuousTensorSpec(1, device=self.device),
+            "roll_target": UnboundedContinuousTensorSpec(1, device=self.device),
             "roll_rate_error": UnboundedContinuousTensorSpec(1, device=self.device),
             "pitch_error": UnboundedContinuousTensorSpec(1, device=self.device),
             "pitch_target": UnboundedContinuousTensorSpec(1, device=self.device),
@@ -322,6 +440,8 @@ class TwoWheelBalance(IsaacEnv):
             "terminated_pitch": UnboundedContinuousTensorSpec(1, device=self.device),
             "terminated_height": UnboundedContinuousTensorSpec(1, device=self.device),
             "terminated_xy": UnboundedContinuousTensorSpec(1, device=self.device),
+            "terminated_nan": UnboundedContinuousTensorSpec(1, device=self.device),
+            "done": UnboundedContinuousTensorSpec(1, device=self.device),
             "fall_penalty": UnboundedContinuousTensorSpec(1, device=self.device),
             "stand_reward": UnboundedContinuousTensorSpec(1, device=self.device),
             "settle_reward": UnboundedContinuousTensorSpec(1, device=self.device),
@@ -359,6 +479,9 @@ class TwoWheelBalance(IsaacEnv):
             "leg_action_diff": UnboundedContinuousTensorSpec(1, device=self.device),
             "command_vx": UnboundedContinuousTensorSpec(1, device=self.device),
             "command_yaw_rate": UnboundedContinuousTensorSpec(1, device=self.device),
+            "anneal_progress": UnboundedContinuousTensorSpec(1, device=self.device),
+            "tracking_multiplier": UnboundedContinuousTensorSpec(1, device=self.device),
+            "posture_multiplier": UnboundedContinuousTensorSpec(1, device=self.device),
             "wl_tracking_lin_vel": UnboundedContinuousTensorSpec(1, device=self.device),
             "wl_tracking_ang_vel": UnboundedContinuousTensorSpec(1, device=self.device),
             "wl_base_height": UnboundedContinuousTensorSpec(1, device=self.device),
@@ -378,6 +501,8 @@ class TwoWheelBalance(IsaacEnv):
             rpy = self.init_rpy_dist.sample(env_ids.shape).unsqueeze(1)
         else:
             rpy = torch.zeros(len(env_ids), 1, 3, device=self.device)
+        rpy[..., 0] += self.reset_roll
+        rpy[..., 1] += self.reset_pitch
         rot = euler_to_quaternion(rpy)
         pos = torch.zeros(len(env_ids), 1, 3, device=self.device)
         pos[..., 2] = self.reset_height
@@ -395,15 +520,15 @@ class TwoWheelBalance(IsaacEnv):
         )
         init_vels = self.init_vels[env_ids].clone()
         if self.training:
-            if self.reset_lin_vel_x > 0.0:
-                init_vels[..., 0] = torch.empty(len(env_ids), 1, device=self.device).uniform_(
-                    -self.reset_lin_vel_x,
-                    self.reset_lin_vel_x,
+            if self.reset_forward_velocity > 0.0:
+                init_vels[..., 1] = torch.empty(len(env_ids), 1, device=self.device).uniform_(
+                    -self.reset_forward_velocity,
+                    self.reset_forward_velocity,
                 )
-            if self.reset_pitch_rate > 0.0:
-                init_vels[..., 4] = torch.empty(len(env_ids), 1, device=self.device).uniform_(
-                    -self.reset_pitch_rate,
-                    self.reset_pitch_rate,
+            if self.reset_balance_rate > 0.0:
+                init_vels[..., 3] = torch.empty(len(env_ids), 1, device=self.device).uniform_(
+                    -self.reset_balance_rate,
+                    self.reset_balance_rate,
                 )
         self.robot.set_velocities(init_vels, env_ids)
         joint_pos = self.init_joint_pos[env_ids].clone()
@@ -437,14 +562,16 @@ class TwoWheelBalance(IsaacEnv):
                 joint_indices=self.robot.passive_joint_indices,
             )
 
-        if self.training and (self.max_command_vx > 0.0 or self.max_command_yaw_rate > 0.0):
+        lin_vel_low, lin_vel_high = self._current_lin_vel_range()
+        has_lin_vel_command = self._has_lin_vel_command()
+        if self.training and (has_lin_vel_command or self.max_command_yaw_rate > 0.0):
             command = torch.zeros(len(env_ids), 1, 2, device=self.device)
-            if self.max_command_vx > 0.0:
+            if has_lin_vel_command:
                 vx = torch.empty(len(env_ids), 1, device=self.device).uniform_(
-                    self.min_command_vx,
-                    self.max_command_vx,
+                    lin_vel_low,
+                    lin_vel_high,
                 )
-                if self.command_bidirectional:
+                if self.command_bidirectional and lin_vel_low >= 0.0 and lin_vel_high >= 0.0:
                     signs = torch.where(
                         torch.rand(len(env_ids), 1, device=self.device) < 0.5,
                         -1.0,
@@ -466,7 +593,7 @@ class TwoWheelBalance(IsaacEnv):
             command[..., 1] = self.eval_command_yaw_rate
             self.command[env_ids] = command
 
-        self.prev_x[env_ids] = 0.0
+        self.prev_forward_pos[env_ids] = 0.0
         self.prev_wheel_vel[env_ids] = self.init_joint_vel[env_ids][..., self.robot.wheel_joint_indices]
         if self.robot.num_leg_joints:
             self.prev_leg_vel[env_ids] = self.init_joint_vel[env_ids][..., self.robot.leg_joint_indices]
@@ -474,9 +601,10 @@ class TwoWheelBalance(IsaacEnv):
 
     def _pre_sim_step(self, tensordict: TensorDictBase):
         actions = tensordict[("agents", "action")].clone()
-        if self.max_command_vx > 0.0 and self.wheel_command_bias > 0.0:
+        lin_vel_scale = self._lin_vel_command_scale()
+        if lin_vel_scale > 0.0 and self.wheel_command_bias > 0.0:
             command_ratio = (
-                self.command[..., 0] / max(self.max_command_vx, 1e-6)
+                self.command[..., 0] / lin_vel_scale
             ).clamp(-1.0, 1.0)
             wheel_bias = (
                 command_ratio
@@ -505,14 +633,14 @@ class TwoWheelBalance(IsaacEnv):
             push_ids = new_push.squeeze(-1)
             env_ids = push_ids.nonzero(as_tuple=False).squeeze(-1)
             vels = self.robot.get_velocities(clone=True)
-            vels[push_ids, 0, 0] += kick_mag[push_ids, 0] * kick_sign[push_ids, 0]
-            if self.kick_pitch_rate_max > 0.0:
-                pitch_mag = torch.empty(self.num_envs, 1, device=self.device).uniform_(
-                    self.kick_pitch_rate_min,
-                    self.kick_pitch_rate_max,
+            vels[push_ids, 0, 1] += kick_mag[push_ids, 0] * kick_sign[push_ids, 0]
+            if self.kick_balance_rate_max > 0.0:
+                balance_mag = torch.empty(self.num_envs, 1, device=self.device).uniform_(
+                    self.kick_balance_rate_min,
+                    self.kick_balance_rate_max,
                 )
-                vels[push_ids, 0, 4] += -kick_mag.new_tensor(1.0) * (
-                    pitch_mag[push_ids, 0] * kick_sign[push_ids, 0]
+                vels[push_ids, 0, 3] += -kick_mag.new_tensor(1.0) * (
+                    balance_mag[push_ids, 0] * kick_sign[push_ids, 0]
                 )
             self.robot.set_velocities(
                 vels[push_ids],
@@ -581,30 +709,33 @@ class TwoWheelBalance(IsaacEnv):
         leg_pos_delta = (self.robot.leg_pos - self.robot.leg_neutral_pos) / self.robot.leg_position_scale
         leg_vel_scaled = self.robot.leg_vel / self.robot.max_leg_velocity
 
-        roll_error = roll.abs()
+        command_balance_target = (
+            self.command[..., 0].clamp(-1.0, 1.0)
+            * self.command_balance_gain
+            * self.command_balance_sign
+        ).clamp(-self.command_balance_limit, self.command_balance_limit)
+        roll_target = torch.full_like(roll, self.roll_target) + command_balance_target
+        roll_tracking_error = roll - roll_target
+        roll_error = roll_tracking_error.abs()
         roll_rate_error = roll_rate.abs()
-        pitch_target = (
-            self.command[..., 0]
-            * self.command_pitch_gain
-            * self.command_pitch_sign
-        ).clamp(-self.command_pitch_limit, self.command_pitch_limit)
+        pitch_target = torch.zeros_like(pitch)
         pitch_error = pitch.abs()
         pitch_tracking_error = (pitch - pitch_target).abs()
         pitch_rate_error = pitch_rate.abs()
         height_error = (height - self.base_height_target).abs()
-        tilt_error = roll.square() + pitch.square()
-        uprightness = (torch.cos(roll) * torch.cos(pitch)).clamp(-1.0, 1.0)
-        forward_vx = self.forward_axis_sign * vx
-        velocity_error = (forward_vx - self.command[..., 0]).abs()
+        tilt_error = roll_tracking_error.square() + pitch_tracking_error.square()
+        uprightness = (torch.cos(roll_tracking_error) * torch.cos(pitch_tracking_error)).clamp(-1.0, 1.0)
+        forward_velocity = self.forward_axis_sign * vy
+        velocity_error = (forward_velocity - self.command[..., 0]).abs()
         command_vx = self.command[..., 0]
         command_active = command_vx.abs() > self.command_active_vx
-        forward_displacement = self.forward_axis_sign * self.robot.pos[..., 0]
-        delta_x = forward_displacement - self.prev_x
-        if self.max_command_vx > 0.0:
-            position_error = pos_xy[..., 1].abs()
+        forward_displacement = self.forward_axis_sign * self.robot.pos[..., 1]
+        delta_forward = forward_displacement - self.prev_forward_pos
+        if self._has_lin_vel_command():
+            position_error = pos_xy[..., 0].abs()
         else:
             position_error = pos_xy.norm(dim=-1)
-        lateral_velocity_error = vy.abs()
+        lateral_velocity_error = vx.abs()
         vertical_velocity_error = vz.abs()
         yaw_error = torch.atan2(torch.sin(yaw), torch.cos(yaw)).abs()
         yaw_rate_error = (yaw_rate - self.command[..., 1]).abs()
@@ -627,11 +758,12 @@ class TwoWheelBalance(IsaacEnv):
         ).float() + (
             ((wheel_right * prev_wheel_right) < 0.0) & (wheel_right.abs() + prev_wheel_right.abs() > 0.035)
         ).float()
-        action_diff_limit = 0.10 if self.max_command_vx > 0.0 else 0.05
-        wheel_vel_diff_limit = 0.14 if self.max_command_vx > 0.0 else 0.08
+        has_lin_vel_command = self._has_lin_vel_command()
+        action_diff_limit = 0.10 if has_lin_vel_command else 0.05
+        wheel_vel_diff_limit = 0.14 if has_lin_vel_command else 0.08
         action_diff_excess = (action_diff - action_diff_limit).clamp_min(0.0)
         wheel_vel_diff_excess = (wheel_vel_diff - wheel_vel_diff_limit).clamp_min(0.0)
-        wheel_speed_limit = 0.55 if self.max_command_vx > 0.0 else 0.12
+        wheel_speed_limit = 0.55 if has_lin_vel_command else 0.12
         wheel_speed_excess = (wheel_speed - wheel_speed_limit).clamp_min(0.0)
         if self.robot.num_leg_joints:
             leg_pos_error = torch.linalg.vector_norm(leg_pos_delta, dim=-1) / (self.robot.num_leg_joints ** 0.5)
@@ -658,14 +790,14 @@ class TwoWheelBalance(IsaacEnv):
         wl_base_height = torch.exp(
             -height_error.square() / max(self.wl_height_sigma, 1e-6)
         )
-        wl_orientation = roll.square() + pitch.square()
+        wl_orientation = roll_tracking_error.square() + pitch_tracking_error.square()
         wl_lin_vel_z = vz.square()
         wl_ang_vel_xy = roll_rate.square() + pitch_rate.square()
         wl_action_rate = self.robot.action_difference.square()
         wl_action_smooth = self.robot.action_acceleration.square()
         wl_nominal_state = leg_pos_error.square()
         reward_upright = torch.exp(
-            -30.0 * roll.square()
+            -30.0 * roll_tracking_error.square()
             -12.0 * pitch_tracking_error.square()
             -self.upright_roll_rate_scale * roll_rate.square()
             -self.upright_pitch_rate_scale * pitch_rate.square()
@@ -674,17 +806,17 @@ class TwoWheelBalance(IsaacEnv):
         reward_velocity = torch.exp(-600.0 * velocity_error.square())
         reward_direction = torch.where(
             command_active,
-            (forward_vx * torch.sign(command_vx) / max(self.max_command_vx, 1e-6)).clamp(-1.0, 1.0),
+            (forward_velocity * torch.sign(command_vx) / command_vx.abs().clamp_min(1e-6)).clamp(-1.0, 1.0),
             torch.ones_like(vx),
         )
         forward_progress = torch.where(
             command_active,
-            (forward_vx * torch.sign(command_vx) / command_vx.abs().clamp_min(1e-6)).clamp(-1.0, 1.5),
+            (forward_velocity * torch.sign(command_vx) / command_vx.abs().clamp_min(1e-6)).clamp(-1.0, 1.5),
             torch.ones_like(vx),
         )
         displacement_progress = torch.where(
             command_active,
-            (delta_x * torch.sign(command_vx) / (command_vx.abs().clamp_min(1e-6) * self.progress_dt)).clamp(-1.0, 1.5),
+            (delta_forward * torch.sign(command_vx) / (command_vx.abs().clamp_min(1e-6) * self.progress_dt)).clamp(-1.0, 1.5),
             torch.ones_like(vx),
         )
         forward_deficit = torch.where(
@@ -735,14 +867,14 @@ class TwoWheelBalance(IsaacEnv):
             + 2.5 * self.robot.wheel_action_acceleration.square()
         )
 
-        roll_penalty = -roll.square()
+        roll_penalty = -roll_tracking_error.square()
         roll_rate_penalty = -roll_rate.square()
         pitch_penalty = -pitch_tracking_error.square()
         pitch_rate_penalty = -pitch_rate.square()
         yaw_penalty = -yaw_error.square()
         yaw_rate_penalty = -yaw_rate.square()
         position_penalty = -(position_error - 0.02).clamp_min(0.0).square()
-        lateral_velocity_penalty = -vy.square()
+        lateral_velocity_penalty = -vx.square()
         lin_vel_z_penalty = -vz.square()
         action_diff_penalty = -action_diff_excess.square()
         wheel_vel_diff_penalty = -wheel_vel_diff_excess.square()
@@ -794,7 +926,7 @@ class TwoWheelBalance(IsaacEnv):
             target_nominal_state = leg_pos_error.square()
         target_lin_vel_z = vz.square()
         target_ang_vel_xy = roll_rate.square() + pitch_rate.square()
-        target_orientation = self.robot.up[..., :2].square().sum(-1)
+        target_orientation = roll_tracking_error.square() + pitch_tracking_error.square()
         target_dof_vel = self.robot.wheel_vel.square().sum(-1)
         if self.robot.num_leg_joints:
             target_dof_vel = target_dof_vel + self.robot.leg_vel.square().sum(-1)
@@ -811,10 +943,11 @@ class TwoWheelBalance(IsaacEnv):
         terminated_roll = roll_error > self.termination_roll
         terminated_pitch = pitch_error > self.termination_pitch
         terminated_height = height < self.min_height
+        terminated_body_contact = height < self.body_contact_height
         terminated_xy = self.robot.pos[..., :2].norm(dim=-1) > self.max_xy
         misbehave = terminated_roll | terminated_pitch | terminated_height | terminated_xy
         if self.terminate_on_body_contact:
-            misbehave = misbehave | (terminal_collision > 0.0)
+            misbehave = misbehave | terminated_body_contact | (terminal_collision > 0.0)
         fall_penalty = -misbehave.float()
 
         reward = (
@@ -825,10 +958,10 @@ class TwoWheelBalance(IsaacEnv):
             + self.reward_settle_weight * _as_column(settle_reward)
             + self.reward_leg_neutral_weight * _as_column(reward_leg_neutral)
             + self.penalty_fall_weight * _as_column(fall_penalty)
-            + self.penalty_roll_weight * _as_column(roll_penalty)
-            + self.penalty_roll_rate_weight * _as_column(roll_rate_penalty)
-            + self.penalty_pitch_weight * _as_column(pitch_penalty)
-            + self.penalty_pitch_rate_weight * _as_column(pitch_rate_penalty)
+            + self._posture_multiplier * self.penalty_roll_weight * _as_column(roll_penalty)
+            + self._posture_multiplier * self.penalty_roll_rate_weight * _as_column(roll_rate_penalty)
+            + self._posture_multiplier * self.penalty_pitch_weight * _as_column(pitch_penalty)
+            + self._posture_multiplier * self.penalty_pitch_rate_weight * _as_column(pitch_rate_penalty)
             + self.penalty_yaw_weight * _as_column(yaw_penalty)
             + self.penalty_yaw_rate_weight * _as_column(yaw_rate_penalty)
             + self.penalty_position_weight * _as_column(position_penalty)
@@ -855,15 +988,15 @@ class TwoWheelBalance(IsaacEnv):
             + self.penalty_forward_deficit_weight * _as_column(forward_deficit_penalty)
             + self.penalty_speed_shortfall_weight * _as_column(speed_shortfall_penalty)
             + self.penalty_low_height_weight * _as_column(low_height_penalty)
-            + self.reward_tracking_lin_vel_weight * _as_column(safe_target_tracking_lin_vel)
-            + self.reward_tracking_lin_vel_enhance_weight * _as_column(safe_target_tracking_lin_vel_enhance)
+            + self._tracking_lin_vel_multiplier * self.reward_tracking_lin_vel_weight * _as_column(safe_target_tracking_lin_vel)
+            + self._tracking_lin_vel_multiplier * self.reward_tracking_lin_vel_enhance_weight * _as_column(safe_target_tracking_lin_vel_enhance)
             + self.reward_tracking_ang_vel_weight * _as_column(target_tracking_ang_vel)
             + self.reward_tracking_ang_vel_enhance_weight * _as_column(target_tracking_ang_vel_enhance)
             + self.reward_base_height_weight * _as_column(target_base_height)
             + self.reward_nominal_state_weight * _as_column(target_nominal_state)
             + self.reward_lin_vel_z_weight * _as_column(target_lin_vel_z)
             + self.reward_ang_vel_xy_weight * _as_column(target_ang_vel_xy)
-            + self.reward_orientation_weight * _as_column(target_orientation)
+            + self._posture_multiplier * self.reward_orientation_weight * _as_column(target_orientation)
             + self.reward_dof_vel_weight * _as_column(target_dof_vel)
             + self.reward_dof_acc_weight * _as_column(target_dof_acc)
             + self.reward_torques_weight * _as_column(target_torques)
@@ -879,6 +1012,7 @@ class TwoWheelBalance(IsaacEnv):
 
         self.stats["uprightness"].lerp_(uprightness, 1 - self.alpha)
         self.stats["roll_error"].lerp_(roll_error, 1 - self.alpha)
+        self.stats["roll_target"].lerp_(roll_target.abs(), 1 - self.alpha)
         self.stats["roll_rate_error"].lerp_(roll_rate_error, 1 - self.alpha)
         self.stats["pitch_error"].lerp_(pitch_error, 1 - self.alpha)
         self.stats["pitch_target"].lerp_(pitch_target.abs(), 1 - self.alpha)
@@ -890,13 +1024,15 @@ class TwoWheelBalance(IsaacEnv):
         self.stats["terminated_pitch"].lerp_(terminated_pitch.float(), 1 - self.alpha)
         self.stats["terminated_height"].lerp_(terminated_height.float(), 1 - self.alpha)
         self.stats["terminated_xy"].lerp_(terminated_xy.float(), 1 - self.alpha)
+        self.stats["terminated_nan"].lerp_(hasnan.float(), 1 - self.alpha)
+        self.stats["done"].lerp_((terminated | truncated).float(), 1 - self.alpha)
         self.stats["fall_penalty"].lerp_(fall_penalty, 1 - self.alpha)
         self.stats["stand_reward"].lerp_(stand_reward, 1 - self.alpha)
         self.stats["settle_reward"].lerp_(settle_reward, 1 - self.alpha)
         self.stats["quiet_state"].lerp_(quiet_state, 1 - self.alpha)
         self.stats["quiet_wheel_penalty"].lerp_(-quiet_wheel_penalty, 1 - self.alpha)
         self.stats["velocity_error"].lerp_(velocity_error, 1 - self.alpha)
-        self.stats["forward_velocity"].lerp_(forward_vx, 1 - self.alpha)
+        self.stats["forward_velocity"].lerp_(forward_velocity, 1 - self.alpha)
         self.stats["velocity_alignment"].lerp_(reward_direction, 1 - self.alpha)
         self.stats["forward_progress"].lerp_(forward_progress, 1 - self.alpha)
         self.stats["displacement_progress"].lerp_(displacement_progress, 1 - self.alpha)
@@ -927,6 +1063,18 @@ class TwoWheelBalance(IsaacEnv):
         self.stats["leg_action_diff"].lerp_(self.robot.leg_action_difference, 1 - self.alpha)
         self.stats["command_vx"].lerp_(self.command[..., 0].abs(), 1 - self.alpha)
         self.stats["command_yaw_rate"].lerp_(self.command[..., 1].abs(), 1 - self.alpha)
+        self.stats["anneal_progress"].lerp_(
+            torch.full_like(height, self._anneal_progress),
+            1 - self.alpha,
+        )
+        self.stats["tracking_multiplier"].lerp_(
+            torch.full_like(height, self._tracking_lin_vel_multiplier),
+            1 - self.alpha,
+        )
+        self.stats["posture_multiplier"].lerp_(
+            torch.full_like(height, self._posture_multiplier),
+            1 - self.alpha,
+        )
         self.stats["wl_tracking_lin_vel"].lerp_(wl_tracking_lin_vel, 1 - self.alpha)
         self.stats["wl_tracking_ang_vel"].lerp_(wl_tracking_ang_vel, 1 - self.alpha)
         self.stats["wl_base_height"].lerp_(wl_base_height, 1 - self.alpha)
@@ -937,7 +1085,7 @@ class TwoWheelBalance(IsaacEnv):
         self.stats["wl_dof_acc"].lerp_(leg_dof_acc_sq, 1 - self.alpha)
         self.stats["return"] += reward
         self.stats["episode_len"][:] = self.progress_buf.unsqueeze(1)
-        self.prev_x[:] = forward_displacement
+        self.prev_forward_pos[:] = forward_displacement
         self.prev_wheel_vel[:] = self.robot.wheel_vel
         if self.robot.num_leg_joints:
             self.prev_leg_vel[:] = self.robot.leg_vel

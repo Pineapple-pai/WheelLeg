@@ -45,10 +45,23 @@ def main(cfg):
     td = env.reset()
 
     print(
-        "step, roll, pitch, yaw, height, vx, wz, wheel_l, wheel_r, "
+        "config, "
+        f"checkpoint_version={cfg.checkpoint_version}, "
+        f"roll_target={float(cfg.task.get('roll_target', 0.0)):.4f}, "
+        f"termination_roll={float(cfg.task.get('termination_roll', 0.0)):.4f}, "
+        f"min_height={float(cfg.task.get('min_height', 0.0)):.4f}, "
+        f"base_height_target={float(cfg.task.get('base_height_target', 0.0)):.4f}, "
+        f"usd_path={cfg.task.robot.get('usd_path', '')}",
+        flush=True,
+    )
+    print(
+        "step, roll, pitch, yaw, height, forward_vy, lateral_vx, wz, wheel_l, wheel_r, "
+        "wheel_l_rad_s, wheel_r_rad_s, expected_no_slip_v, slip_v, slip_ratio, "
         "act_l, act_r, leg_pos_norm, leg_vel_norm, leg_act_norm, reward, done",
         flush=True,
     )
+    wheel_radius = float(cfg.task.robot.get("wheel_radius", 0.06))
+    wheel_rolling_sign = float(cfg.task.robot.get("wheel_rolling_sign", -1.0))
     prev_wheel = None
     prev_action = None
     prev_action_delta = None
@@ -56,6 +69,8 @@ def main(cfg):
     sum_wheel_delta = 0.0
     sum_wheel_sign_flip = 0.0
     sum_action_accel = 0.0
+    sum_abs_slip = 0.0
+    sum_slip_ratio = 0.0
     measured_steps = 0
     with torch.no_grad(), set_exploration_type(ExplorationType.MODE):
         for step in range(steps):
@@ -67,18 +82,30 @@ def main(cfg):
             action_vec = action[0, 0].detach().cpu()
             reward = td[("next", "agents", "reward")][0, 0, 0].detach().cpu().item()
             done = td[("next", "done")][0, 0].detach().cpu().item()
-            leg_pos_norm = obs[16:20].norm().item() if obs.numel() >= 24 else 0.0
-            leg_vel_norm = obs[20:24].norm().item() if obs.numel() >= 24 else 0.0
+            leg_pos_norm = base_env.robot.leg_pos[0, 0].norm().item()
+            leg_vel_norm = base_env.robot.leg_vel[0, 0].norm().item()
             leg_act_norm = action_vec[2:].norm().item() if action_vec.numel() > 2 else 0.0
+            wheel_rad_s = base_env.robot.wheel_vel[0, 0].detach().cpu()
+            expected_no_slip_v = wheel_rolling_sign * wheel_radius * wheel_rad_s.mean().item()
+            slip_v = expected_no_slip_v - obs[5].item()
+            slip_ratio = abs(slip_v) / max(abs(expected_no_slip_v), 0.05)
+            sum_abs_slip += abs(slip_v)
+            sum_slip_ratio += slip_ratio
             values = {
                 "roll": obs[0].item(),
                 "pitch": obs[1].item(),
                 "yaw": obs[2].item(),
                 "height": obs[3].item(),
-                "vx": obs[4].item(),
+                "forward_vy": obs[5].item(),
+                "lateral_vx": obs[4].item(),
                 "wz": obs[9].item(),
                 "wheel_l": obs[10].item(),
                 "wheel_r": obs[11].item(),
+                "wheel_l_rad_s": wheel_rad_s[0].item(),
+                "wheel_r_rad_s": wheel_rad_s[1].item(),
+                "expected_no_slip_v": expected_no_slip_v,
+                "slip_v": slip_v,
+                "slip_ratio": slip_ratio,
                 "act_l": action_vec[0].item(),
                 "act_r": action_vec[1].item(),
                 "leg_pos_norm": leg_pos_norm,
@@ -109,8 +136,12 @@ def main(cfg):
             if step % print_every == 0 or done:
                 print(
                     f"{step}, {values['roll']:.4f}, {values['pitch']:.4f}, {values['yaw']:.4f}, "
-                    f"{values['height']:.4f}, {values['vx']:.4f}, {values['wz']:.4f}, "
+                    f"{values['height']:.4f}, {values['forward_vy']:.4f}, "
+                    f"{values['lateral_vx']:.4f}, {values['wz']:.4f}, "
                     f"{values['wheel_l']:.4f}, {values['wheel_r']:.4f}, "
+                    f"{values['wheel_l_rad_s']:.4f}, {values['wheel_r_rad_s']:.4f}, "
+                    f"{values['expected_no_slip_v']:.4f}, {values['slip_v']:.4f}, "
+                    f"{values['slip_ratio']:.4f}, "
                     f"{values['act_l']:.4f}, {values['act_r']:.4f}, "
                     f"{values['leg_pos_norm']:.4f}, {values['leg_vel_norm']:.4f}, "
                     f"{values['leg_act_norm']:.4f}, "
@@ -128,7 +159,9 @@ def main(cfg):
         f"steps={measured_steps}, max_abs_roll={max_abs_roll:.4f}, "
         f"mean_wheel_delta={sum_wheel_delta / denom:.4f}, "
         f"mean_wheel_sign_flip={sum_wheel_sign_flip / denom:.4f}, "
-        f"mean_wheel_action_accel={sum_action_accel / accel_denom:.4f}",
+        f"mean_wheel_action_accel={sum_action_accel / accel_denom:.4f}, "
+        f"mean_abs_slip_v={sum_abs_slip / max(measured_steps, 1):.4f}, "
+        f"mean_slip_ratio={sum_slip_ratio / max(measured_steps, 1):.4f}",
         flush=True,
     )
 
