@@ -9,7 +9,7 @@
 1. 打开 `串联腿装配方案2.SLDASM`。
 2. 确认 `What's Wrong` 中没有 dangling mate、missing component 或 rebuild error。
 3. 确认用于实物的 configuration，并将闭链子装配设为 flexible，手动检查完整行程和装配支路。
-4. 新建一个 SolidWorks VBA macro，在 VBA 编辑器中导入 `export_uz05_leg.bas`，运行 `Main`。
+4. 优先在 PowerShell 中运行已验证的 `export_uz05.ps1`；若外部 COM 不可用，再新建 SolidWorks VBA macro，导入 `export_uz05_leg.bas` 并运行 `Main`。
 5. 宏会在装配体旁生成 `uz05_leg_export`：
    - `document.csv`：源装配和 configuration。
    - `components.csv`：组件路径、configuration、suppression state、世界变换和局部质量属性数组。
@@ -17,7 +17,15 @@
 6. 以同一 configuration 导出 `leg_assembly.step`，格式选择 STEP AP242，单位使用米或在交付说明中明确单位。
 7. 使用 `Evaluate -> Mass Properties` 导出质量报告，并分别记录左右髋、膝输入轴和轮轴的坐标与正方向。
 
-宏只读取当前打开的装配体。由于当前 Linux 机器没有 SolidWorks，宏源码尚未在 SolidWorks VBA 编译器中执行；首次运行若遇到 API 版本差异，应保留完整错误信息和 SolidWorks 主版本。
+PowerShell 提取器只读打开装配体，并输出 `document.csv`、`components.csv`、`mates.csv` 和 `mass_properties.csv`。已在 SolidWorks 2024 SP0.1 验证：
+
+```powershell
+.\tools\solidworks\export_uz05.ps1 `
+  -AssemblyPath 'D:\WheelLeg\串联腿装配方案2.SLDASM' `
+  -OutputDirectory '.\model_source\uz05\leg'
+```
+
+VBA 宏只读取当前打开的装配体，保留为外部 COM 注册损坏时的备用入口。
 
 ## 放回项目
 

@@ -111,17 +111,17 @@ def audit_urdf(path: Path) -> int:
     return len(missing) + len(asymmetries) + 2 + bool(non_wheel_continuous)
 
 
-def audit_usd(path: Path, reset_height: float) -> int:
+def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
     try:
-        from pxr import Usd, UsdGeom, UsdPhysics
+        from pxr import Gf, Usd, UsdGeom, UsdPhysics
     except ImportError:
         print("USD: SKIP pxr is unavailable; run this script in the Isaac Sim conda environment")
-        return 1
+        return 1, False
 
     stage = Usd.Stage.Open(str(path))
     if stage is None:
         print(f"USD: FAIL cannot open {path}")
-        return 1
+        return 1, False
     xforms = UsdGeom.XformCache()
     collisions = []
     material_bindings = 0
@@ -145,6 +145,46 @@ def audit_usd(path: Path, reset_height: float) -> int:
             cursor = cursor.GetParent()
 
     joints = [prim for prim in stage.Traverse() if prim.IsA(UsdPhysics.Joint)]
+    loop_joints = [
+        prim for prim in joints
+        if prim.GetAttribute("physics:excludeFromArticulation").Get()
+    ]
+    loop_errors = []
+    for prim in loop_joints:
+        points = []
+        axes = []
+        for index in (0, 1):
+            targets = prim.GetRelationship(f"physics:body{index}").GetTargets()
+            if len(targets) != 1:
+                loop_errors.append(f"{prim.GetPath()} body{index} target count={len(targets)}")
+                continue
+            body = stage.GetPrimAtPath(targets[0])
+            body_world = xforms.GetLocalToWorldTransform(body)
+            local_position = prim.GetAttribute(f"physics:localPos{index}").Get()
+            local_rotation = prim.GetAttribute(f"physics:localRot{index}").Get()
+            if local_position is None or local_rotation is None:
+                loop_errors.append(f"{prim.GetPath()} missing local frame {index}")
+                continue
+            points.append(body_world.Transform(local_position))
+            joint_rotation = Gf.Rotation(Gf.Quatd(local_rotation))
+            axis_name = str(prim.GetAttribute("physics:axis").Get() or "Z")
+            axis = {
+                "X": Gf.Vec3d(1, 0, 0),
+                "Y": Gf.Vec3d(0, 1, 0),
+                "Z": Gf.Vec3d(0, 0, 1),
+            }[axis_name]
+            axes.append((body_world.ExtractRotation() * joint_rotation).TransformDir(axis))
+        if len(points) == 2 and len(axes) == 2:
+            residual = (points[0] - points[1]).GetLength()
+            alignment = abs(axes[0].GetNormalized() * axes[1].GetNormalized())
+            print(
+                f"  loop {prim.GetName()}: anchor_residual={residual:.9g} m "
+                f"axis_alignment={alignment:.9g}"
+            )
+            if residual >= 0.0005 or alignment < 0.999999:
+                loop_errors.append(
+                    f"{prim.GetPath()} residual={residual:.9g}, alignment={alignment:.9g}"
+                )
     bad_drives = []
     for prim in joints:
         stiffness = prim.GetAttribute("drive:angular:physics:stiffness").Get()
@@ -158,7 +198,10 @@ def audit_usd(path: Path, reset_height: float) -> int:
             bad_drives.append(str(prim.GetPath()).rsplit("/", 1)[-1])
 
     print(f"USD: {path}")
-    print(f"  joints={len(joints)}, collision_meshes={len(collisions)}, reset_height={reset_height:.4f} m")
+    print(
+        f"  joints={len(joints)}, loop_joints={len(loop_joints)}, "
+        f"collision_meshes={len(collisions)}, reset_height={reset_height:.4f} m"
+    )
     for low_z, high_z, prim_path, approximation, point_count in sorted(collisions):
         body = prim_path.split("/")[-2]
         print(
@@ -167,6 +210,13 @@ def audit_usd(path: Path, reset_height: float) -> int:
             f"approx={approximation} points={point_count}"
         )
     failures = 0
+    closure_status = stage.GetDefaultPrim().GetCustomDataByKey("uz05:cadClosureStatus")
+    if closure_status and str(closure_status).startswith("repaired_") and len(loop_joints) != 2:
+        print(f"  FAIL repaired CAD expects 2 loop joints, found {len(loop_joints)}")
+        failures += 1
+    if loop_errors:
+        print("  FAIL invalid loop joints: " + "; ".join(loop_errors))
+        failures += 1
     if bad_drives:
         print(f"  FAIL nonphysical imported angular drives: {', '.join(bad_drives)}")
         failures += 1
@@ -175,7 +225,8 @@ def audit_usd(path: Path, reset_height: float) -> int:
         failures += 1
     if any(path_.endswith("/base_link/collisions") for _, _, path_, _, _ in collisions):
         print("  WARN base_link uses one convex hull; cavities are filled by the approximation")
-    return failures
+    valid_closed_loops = len(loop_joints) == 2 and not loop_errors
+    return failures, valid_closed_loops
 
 
 def main() -> int:
@@ -187,12 +238,17 @@ def main() -> int:
     failures = 0
     failures += audit_urdf(args.urdf.resolve())
     print()
-    failures += audit_usd(args.usd.resolve(), args.reset_height)
+    usd_failures, valid_closed_loops = audit_usd(args.usd.resolve(), args.reset_height)
+    failures += usd_failures
     print()
     print("READINESS")
     print("  fixed-leg standing: CONDITIONAL (simulation regression only)")
     print("  wheel translation: BLOCKED until wheel contact/slip is validated")
-    print("  actuated-leg standing and jumping: BLOCKED by missing closed-loop and actuator model")
+    if valid_closed_loops:
+        print("  actuated-leg standing: BLOCKED until the USD closed loop passes an Isaac/PhysX motion sweep")
+        print("  jumping: BLOCKED by unmeasured actuator limits and landing/contact validation")
+    else:
+        print("  actuated-leg standing and jumping: BLOCKED by missing closed-loop and actuator model")
     print("  hardware deployment: BLOCKED by missing calibration and actuator limits")
     return 1 if failures else 0
 

@@ -13,8 +13,8 @@
 | --- | --- | --- |
 | 固定腿站立 | 仿真中已训练 | 可作为回归测试，但尚未证明接触和实物一致 |
 | 轮式平移 | 轮子可驱动 | 暂不验收，必须先消除或解释轮速与车速不一致 |
-| 关节腿站立 | 腿闭链和电机映射缺失 | 不可可信训练 |
-| 跳跃 | 力矩传递、限位和接触冲量不可信 | 不可训练或部署 |
+| 关节腿站立 | CAD/静态 USD 闭链已恢复；尚未做 PhysX 全行程扫描 | 暂不可可信训练 |
+| 跳跃 | 执行器曲线、真实限位和接触冲量不可信 | 不可训练或部署 |
 | 实物部署 | 缺少标定与执行器模型 | 不可直接部署 |
 
 这里的“不可”不是算法问题。当前文件不能唯一描述真实机械系统，继续调奖励只会让策略适应错误的仿真。
@@ -34,7 +34,17 @@
 | `平衡总装.SLDPRT` | 展平几何或质量参考 | 不能替代装配体，通常不保留 mates 和关节语义 |
 | 电机与减速器零件/装配 | 外形、安装位置和 CAD 质量参考 | 不能替代厂家力矩、转速、电流和热参数 |
 
-当前 Linux 环境没有 SolidWorks 或可读取 SolidWorks mates 的 CAD 工具，而且这些新版本二进制文件不能由 `file`、`strings` 或 ExifTool 解析。因此目前无法在本机确认主装配引用是否全部解析、是否存在 suppressed/virtual components、mate 类型和配置名称。FreeCAD/Assimp 即使能读取导出的 STEP，也不会可靠保留 SolidWorks mates。
+2026-08-25 已在 Windows SolidWorks 2024 SP0.1 中完成只读 API 提取，结果位于 `model_source/uz05/`：
+
+| 装配体 | configuration | 组件数 | mate 实体行 | CAD 质量 |
+| --- | --- | ---: | ---: | ---: |
+| `串联腿装配方案2.SLDASM` | `默认` | 153 | 348 | `0.994479 kg` |
+| `底盘总装.SLDASM` | `默认` | 483 | 648 | `15.682047 kg` |
+| `UZ-05-open总装.SLDASM` | `默认` | 635 | 30 | `18.687170 kg` |
+
+腿装配没有活动 mate 错误。原底盘总装中 `同心259/260` 各有两条实体记录报错，涉及左右小腿与 `ASM减速箱/3508屁屁`。进一步几何检查确认旧引用半径为 `23.0 mm`，当前同轴小腿孔半径为 `23.1 mm`，每侧替代面唯一；重新添加 mate 会由 SolidWorks 返回 `OverDefinedAssembly`，说明这两条约束与其余闭链约束冗余。修复副本 `model_source/uz05/solidworks_repaired/chassis.cad_repaired.SLDASM` 已删除这两个坏掉的冗余 mate，关闭重开后 644 条 mate 实体记录全部零错误，所有组件变换相对原装配零漂移。
+
+修复副本打开时仍报告 `swFileNotFoundError`，缺失引用均位于 suppressed 旧方案组件。完整总装也仍需要 regenerate。新的 `twowheel_uz05.cad_repaired.usda` 已从左右连杆网格的唯一重合孔恢复两条 revolute loop constraint，闭链锚点残差分别约为 `2.8e-9 m` 和 `1.65e-9 m`；这解决了静态闭链缺失，但仍需在 Isaac Sim 中做全行程动态求解和接触验证。
 
 这些 CAD **可以使用，但必须先在 Windows SolidWorks 中完成一次受控导出**：
 
@@ -49,8 +59,10 @@
 
 项目中已经准备了后续入口：
 
-- `tools/solidworks/export_uz05_leg.bas`：在 Windows SolidWorks 中提取组件、变换、质量数组和 mates。
+- `tools/solidworks/export_uz05.ps1`：经 SolidWorks 2024 验证的只读批量提取器。
+- `tools/solidworks/export_uz05_leg.bas`：可在 SolidWorks 内运行的 VBA 备用提取器。
 - `tools/solidworks/README.md`：受控导出步骤和交付目录。
+- `scripts/build_uz05_cad_repaired.py`：生成静态恢复版 URDF 和非破坏性 USD 覆盖层。
 - `cfg/model/uz05_deployment.template.yaml`：每侧关节、电机、接触、控制和安全参数模板。
 - `scripts/validate_uz05_deployment_data.py`：缺少实测值或违反基本安全约束时返回失败。
 
@@ -72,10 +84,11 @@
 
 ### USD
 
-- USD 继承了 URDF 的开树结构；把 `Rcrank` 改为 revolute 也不能恢复闭链。
+- 旧训练 USD 继承了 URDF 的开树结构；新 `cad_repaired.usda` 已恢复 `Rcrank` 和两条闭链回边，但尚未在 Isaac/PhysX 中完成动态验收。
 - 导入的角驱动 stiffness 为 `1e7`、damping 为 `0`、max force 为浮点最大值，不是执行器模型。运行时代码虽会覆盖部分值，但仍不具备部署含义。
-- 非轮关节约 `[-1.57, 1.57] rad` 的限位是后加的通用值，不是机械硬限位。
-- 左轮中心约 `X=-0.2273 m`，右轮中心约 `X=+0.2023 m`，几何不对称。`balanced.usd` 的镜像修补没有实物测量依据，不能用于部署标定。
+- 非轮关节原先 authored 为 `[-1.57, 1.57] deg`，是后加且单位写错的通用值，不是机械硬限位。
+- 左右轮刚体原点分别约为 `X=-0.2273 m/+0.2023 m`，但这不是轮胎几何中心。把网格局部偏置计入后，实际包围盒中心为 `X=-0.2169501 m/+0.2169499 m`，左右已经对称；`balanced.usd` 把右轮刚体原点镜像到 `+0.2273 m` 反而会改变真实轮距，不能作为修复基线。
+- USD 的 revolute joint 角限位属性使用度。原先写入的 `[-1.57, 1.57]` 实际只允许约 `+/-0.0274 rad`，并非文档声称的 `+/-1.57 rad`；`cad_repaired.usda` 已将静态回归用的临时范围改为 `[-90, 90] deg`。这仍不是机械硬限位。
 - 当前训练 USD 每个链接使用完整网格的单个 convex hull；`base_link` 的单凸包会填充凹腔。
 - 轮胎碰撞网格没有显式 PhysicsMaterial。地面摩擦配置不能代替轮胎橡胶参数及组合规则标定。
 - 轮子 STL 半径约 `0.06 m`、宽度约 `0.0293 m`。

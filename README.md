@@ -138,8 +138,8 @@ python scripts/play.py task=TwoWheelBalance checkpoint_version=v6 headless=false
 - `TwoWheelBalance` 当前只暴露两个轮动作，其余关节固定在 URDF 零位。
 - Isaac Sim 4.0 的 articulation tensor view 不提供可靠的逐 link 接触力；直立和倒地高度范围又有重叠，因此终止主要使用 roll/pitch 和最低高度，不启用 `body_contact_height` 代理。
 - 实测接地后 base 高度约为 `0.083 m`，reset 使用 `0.084 m`，避免每个 episode 从 `0.14 m` 自由落体开始。
-- 其它 revolute 关节已写入宽限位 `[-1.57, 1.57]`，便于 PhysX 和任务代码里的 DOF limit penalty 生效。
+- 旧基线其它 revolute 关节 authored 为 `[-1.57, 1.57] deg`，并不是预期的 `rad` 宽限位；新的 `cad_repaired.usda` 使用临时 `[-90, 90] deg` 范围。两者都不能替代机械硬限位实测。
 - 所有轮腿任务配置都显式设置了腿部 drive 和被动关节 drive，不再隐式依赖 USD 中导出的超大默认 stiffness。
 - `lock_passive_joints: true` 会把非受控关节锁在 reset 时的初始位置，减少训练时机构自由漂移。
 
-原始模型位于 `/home/p/下载/UZ-05-open总装11.57/urdf/UZ-05-open总装11.57.urdf`。它由 SolidWorks 自动导出，包含固定的 `Rcrank`、左右不一致的轮位和一个无法表达机械闭环的开链树。当前保留这些源数据，不通过猜测镜像修改质量或关节；后续腿部训练需要依据实物电机编码器零位和闭环约束建立简化运动学模型。
+原始模型位于 `/home/p/下载/UZ-05-open总装11.57/urdf/UZ-05-open总装11.57.urdf`。它由 SolidWorks 自动导出，包含错误固定的 `Rcrank` 和一个无法表达机械闭环的开链树。左右轮刚体原点不同，但计入 STL 局部偏置后的轮胎几何中心实际对称，不能使用 `balanced.usd` 的简单镜像补丁。后续腿部训练仍需依据实物电机编码器零位和闭环约束建立简化运动学模型。

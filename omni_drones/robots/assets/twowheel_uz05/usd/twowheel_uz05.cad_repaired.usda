@@ -1,0 +1,333 @@
+#usda 1.0
+(
+    defaultPrim = "twowheel_uz05"
+    subLayers = [
+        @twowheel_uz05.all_joints.usd@
+    ]
+)
+
+over "twowheel_uz05" (
+    customData = {
+        dictionary uz05 = {
+            double cadChassisMassKg = 15.6823443830009
+            string cadClosureStatus = "repaired_redundant_mates_259_260_removed"
+            string cadConfiguration = "默认"
+            double cadFullAssemblyMassKg = 18.68716973046
+            double cadLegMassKg = 0.994478771084523
+            string cadSource = "D:\\WheelLeg\\UZ-05-open总装.SLDASM"
+            string urdfTopology = "open_tree_for_visualization_and_static_regression"
+        }
+    }
+)
+{
+    over "base_link"
+    {
+        point3f physics:centerOfMass = (-0.01749167, -0.0031104556, 0.07085204)
+        float3 physics:diagonalInertia = (0.59538275, 0.6208567, 1.1190841)
+        float physics:mass = 12.92594
+        quatf physics:principalAxes = (0.7795094, -0.05509829, -0.012367238, -0.62384)
+
+        over PhysicsRevoluteJoint "Rcrank" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            uniform token physics:axis = "Z"
+            point3f physics:localPos0 = (0.1905, 0, 0.1305)
+            point3f physics:localPos1 = (0, 0, 0)
+            quatf physics:localRot0 = (0.4727958, -0.52579844, -0.4727958, 0.52579844)
+            quatf physics:localRot1 = (1, 0, 0, 0)
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "LL" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Lcrank" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "RL" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Yaw" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    def "loop_joints"
+    {
+        def PhysicsRevoluteJoint "left_leg_closure" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </twowheel_uz05/L12>
+            rel physics:body1 = </twowheel_uz05/L234>
+            bool physics:collisionEnabled = 0
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (-3.6337516e-7, 3.8918026e-7, -0.01924998)
+            point3f physics:localPos1 = (-0.108666204, 0.029116841, 0.0072499975)
+            quatf physics:localRot0 = (0.4744343, -0.8802909, -3.3211705e-8, 0)
+            quatf physics:localRot1 = (7.265259e-8, 0, -0.934686, -0.3554744)
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        def PhysicsRevoluteJoint "right_leg_closure" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            uniform token physics:axis = "Z"
+            rel physics:body0 = </twowheel_uz05/R12>
+            rel physics:body1 = </twowheel_uz05/R234>
+            bool physics:collisionEnabled = 0
+            uniform bool physics:excludeFromArticulation = 1
+            point3f physics:localPos0 = (-3.401398e-7, 3.733386e-7, 0.014249989)
+            point3f physics:localPos1 = (-0.108666204, 0.029116841, -0.0022500104)
+            quatf physics:localRot0 = (0.47443432, -0.8802909, 4.5141021e-10, -4.214685e-8)
+            quatf physics:localRot1 = (7.265259e-8, 0, -0.934686, -0.3554744)
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "LL"
+    {
+        over "L234" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Lcal" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "Lcal"
+    {
+        over "L45" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 12
+            float drive:angular:physics:maxForce = 60
+            float drive:angular:physics:stiffness = 120
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Lwhl" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 4
+            float drive:angular:physics:maxForce = 12
+            float drive:angular:physics:stiffness = 0
+        }
+    }
+
+    over "Lcrank"
+    {
+        over "L12" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 12
+            float drive:angular:physics:maxForce = 60
+            float drive:angular:physics:stiffness = 120
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "RL"
+    {
+        over "R234" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Rcal" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "Rcal"
+    {
+        over "R45" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 12
+            float drive:angular:physics:maxForce = 60
+            float drive:angular:physics:stiffness = 120
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "Rwhl" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 4
+            float drive:angular:physics:maxForce = 12
+            float drive:angular:physics:stiffness = 0
+        }
+    }
+
+    over "Rcrank"
+    {
+        over "R12" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 12
+            float drive:angular:physics:maxForce = 60
+            float drive:angular:physics:stiffness = 120
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "Yaw"
+    {
+        over "P" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+
+        over "P12" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    over "P"
+    {
+        over "P23" (
+            prepend apiSchemas = ["PhysicsDriveAPI:angular"]
+        )
+        {
+            float drive:angular:physics:damping = 20
+            float drive:angular:physics:maxForce = 80
+            float drive:angular:physics:stiffness = 500
+            float physics:lowerLimit = -90
+            float physics:upperLimit = 90
+        }
+    }
+
+    def "PhysicsMaterials"
+    {
+        def Material "WheelRubber" (
+            prepend apiSchemas = ["PhysicsMaterialAPI"]
+        )
+        {
+            float physics:dynamicFriction = 1
+            float physics:restitution = 0
+            float physics:staticFriction = 1.2
+        }
+    }
+
+    over "Lwhl"
+    {
+        over "collisions" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding:physics = </twowheel_uz05/PhysicsMaterials/WheelRubber> (
+                bindMaterialAs = "weakerThanDescendants"
+            )
+        }
+    }
+
+    over "Rwhl"
+    {
+        over "collisions" (
+            prepend apiSchemas = ["MaterialBindingAPI"]
+        )
+        {
+            rel material:binding:physics = </twowheel_uz05/PhysicsMaterials/WheelRubber> (
+                bindMaterialAs = "weakerThanDescendants"
+            )
+        }
+    }
+}
+
