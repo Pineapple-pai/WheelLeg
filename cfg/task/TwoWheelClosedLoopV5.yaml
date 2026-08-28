@@ -1,0 +1,136 @@
+defaults:
+  - TwoWheelClosedLoopV4
+  - _self_
+
+# One policy learns standing, bidirectional translation and yaw together.
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion
+
+# Keep exact command classes in every reset batch. The remaining 50% after
+# stand/yaw/mixed allocation is pure forward/backward translation.
+command_stratified_sampling: true
+command_zero_prob: 0.30
+command_yaw_only_prob: 0.10
+command_mixed_prob: 0.10
+command_min_move_speed: 0.02
+command_min_yaw_rate: 0.04
+command_active_vx: 0.015
+command_active_yaw_rate: 0.04
+command_resample_interval: 4.0
+normalized_command_observation: true
+
+# All command classes are active from iteration 1. Only their magnitude grows
+# with training progress, avoiding a manual stand-to-move checkpoint switch.
+command_curriculum_enabled: true
+command_curriculum_start_frame: 0
+command_curriculum_end_frame: 24576000
+lin_vel_curriculum_start: [-0.04, 0.04]
+lin_vel_curriculum_end: [-0.50, 0.50]
+lin_vel_range: [-0.50, 0.50]
+max_command_yaw_rate: 0.35
+yaw_rate_curriculum_start: 0.08
+yaw_rate_curriculum_end: 0.35
+command_balance_gain: 0.08
+command_balance_limit: 0.06
+command_balance_sign: -1.0
+command_balance_from_velocity_error: true
+wheel_command_bias: 0.0
+wheel_command_bias_sign: -1.0
+wheel_command_feedforward_gain: 3.0
+
+eval_command_vx: 0.0
+eval_command_yaw_rate: 0.0
+eval_move_command_vx: 0.20
+eval_turn_command_yaw_rate: 0.20
+eval_disturbances: true
+max_xy: 10.0
+
+# Velocity-drive balancing is nominally stable, but applying the full V4
+# torque-mode disturbance set from iteration 1 destroys the learning trajectory.
+# Disturbances are therefore present as a continuous curriculum, not a separate
+# checkpoint stage.
+disturbance_curriculum_enabled: true
+disturbance_curriculum_start_frame: 6000000
+disturbance_curriculum_end_frame: 40000000
+disturbance_scale_start: 0.0
+disturbance_scale_end: 1.0
+
+# The baseline tracks commanded speed and only holds the spawn position for a
+# zero translation command. PPO retains enough residual authority to adapt.
+wheel_balance_baseline_enabled: true
+wheel_balance_use_command_target: true
+# Keep the deployable balance loop command-agnostic. The policy residual owns
+# locomotion, while the baseline only damps uncommanded body velocity.
+wheel_balance_track_velocity_command: false
+wheel_balance_roll_kp: 24.0
+wheel_balance_roll_kd: 3.0
+wheel_balance_velocity_kd: 0.25
+wheel_balance_position_kp: -0.01
+translation_position_hold_curriculum_enabled: true
+translation_position_hold_release_start_frame: 0
+translation_position_hold_release_end_frame: 1500000
+wheel_balance_yaw_kp: 0.0
+wheel_balance_yaw_kd: 0.0
+wheel_residual_scale: 1.0
+wheel_residual_curriculum_enabled: true
+wheel_residual_curriculum_start_frame: 0
+wheel_residual_curriculum_end_frame: 6000000
+wheel_residual_scale_start: 0.60
+wheel_residual_scale_end: 1.0
+penalty_policy_wheel_residual_weight: 0.10
+penalty_zero_command_velocity_weight: 12.0
+# The sign-only startup hint was useful as a diagnostic but not a reliable
+# physical prior. Keep it off; dense velocity progress and PBRS now provide the
+# early locomotion gradient.
+reward_command_action_alignment_weight: 0.0
+command_action_alignment_end_frame: 16000000
+leg_policy_scale: 1.0
+leg_policy_curriculum_enabled: true
+leg_policy_curriculum_start_frame: 0
+leg_policy_curriculum_end_frame: 36864000
+leg_policy_scale_start: 0.01
+leg_policy_scale_end: 1.0
+
+# Do not anneal away posture stability. Command difficulty, not reward meaning,
+# changes during this single joint-training run.
+reward_anneal_enabled: false
+reward_tracking_lin_vel_weight: 8.0
+reward_tracking_lin_vel_enhance_weight: 3.0
+reward_tracking_ang_vel_weight: 3.0
+reward_tracking_ang_vel_enhance_weight: 1.0
+reward_tracking_lin_vel_pbrs_weight: 4.0
+reward_tracking_ang_vel_pbrs_weight: 1.5
+reward_velocity_progress_weight: 30.0
+reward_yaw_rate_progress_weight: 8.0
+reward_joint_symmetry_weight: 0.8
+tracking_sigma: 0.035
+penalty_position_weight: 20.0
+penalty_yaw_weight: 12.0
+penalty_yaw_rate_weight: 2.0
+
+# Four active closed-loop inputs use deployable position and velocity targets.
+# Position targets stay near the validated neutral stance until height control
+# authority has been measured over the full mechanism range.
+robot:
+  wheel_effort_actions: false
+  max_wheel_velocity: 20.0
+  wheel_radius: 0.06
+  # Both USD wheel axes resolve to world +X, so their actuator polarity matches.
+  wheel_velocity_sign: [1.0, 1.0]
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 0.2
+  wheel_drive_max_force: 2.46
+  wheel_drive_max_velocity: 20.0
+  action_smoothing: 0.65
+  action_rate_limit: 0.25
+  action_accel_limit: 0.20
+
+  leg_velocity_actions: true
+  leg_position_scale: 0.08
+  max_leg_velocity: 0.40
+  leg_action_smoothing: 0.18
+  leg_action_rate_limit: 0.04
+  leg_drive_stiffness: 120.0
+  leg_drive_damping: 12.0
+  leg_drive_max_force: 20.0
+  leg_drive_max_velocity: 0.50

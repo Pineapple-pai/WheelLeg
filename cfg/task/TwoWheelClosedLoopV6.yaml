@@ -1,0 +1,83 @@
+defaults:
+  - TwoWheelClosedLoopV5
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense
+
+# Joint training: stand, translate, yaw and mixed commands are all present from
+# the first reset. The curriculum widens the command envelope instead of
+# changing the task definition between checkpoints.
+command_zero_prob: 0.25
+command_yaw_only_prob: 0.10
+command_mixed_prob: 0.15
+command_min_move_speed: 0.04
+command_min_yaw_rate: 0.05
+command_active_vx: 0.025
+command_active_yaw_rate: 0.05
+lin_vel_curriculum_start: [-0.08, 0.08]
+lin_vel_curriculum_end: [-0.60, 0.60]
+lin_vel_range: [-0.60, 0.60]
+yaw_rate_curriculum_start: 0.10
+yaw_rate_curriculum_end: 0.40
+max_command_yaw_rate: 0.40
+
+# Release the balance-loop position hold quickly for translation commands.
+# Zero-command samples still use quiet/velocity penalties to preserve standing.
+translation_position_hold_release_start_frame: 0
+translation_position_hold_release_end_frame: 250000
+wheel_residual_curriculum_end_frame: 3000000
+wheel_residual_scale_start: 0.80
+wheel_residual_scale_end: 1.0
+penalty_policy_wheel_residual_weight: 0.03
+penalty_zero_command_velocity_weight: 15.0
+wheel_command_feedforward_gain: 1.0
+
+# Dense locomotion terms adapted from the two reference projects: exponential
+# velocity tracking, direction/progress rewards, action smoothness and nominal
+# joint symmetry. These keep gradient alive before exact tracking is possible.
+reward_velocity_weight: 6.0
+reward_direction_weight: 2.0
+reward_forward_progress_weight: 4.0
+reward_displacement_progress_weight: 2.0
+penalty_forward_deficit_weight: 1.0
+penalty_speed_shortfall_weight: 0.5
+reward_position_weight: 1.0
+reward_yaw_weight: 0.5
+reward_yaw_rate_weight: 2.0
+reward_tracking_lin_vel_weight: 7.0
+reward_tracking_lin_vel_enhance_weight: 4.0
+reward_tracking_ang_vel_weight: 3.0
+reward_tracking_ang_vel_enhance_weight: 1.5
+reward_tracking_lin_vel_pbrs_weight: 5.0
+reward_tracking_ang_vel_pbrs_weight: 2.0
+reward_velocity_progress_weight: 45.0
+reward_yaw_rate_progress_weight: 12.0
+reward_wheel_command_tracking_weight: 1.5
+wheel_command_tracking_sigma: 0.020
+wheel_command_tracking_sign: 1.0
+reward_joint_symmetry_weight: 1.0
+tracking_sigma: 0.020
+
+robot:
+  wheel_effort_actions: false
+  max_wheel_velocity: 20.0
+  wheel_radius: 0.06
+  wheel_velocity_sign: [1.0, 1.0]
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 0.2
+  wheel_drive_max_force: 2.46
+  wheel_drive_max_velocity: 20.0
+  action_smoothing: 0.55
+  action_rate_limit: 0.35
+  action_accel_limit: 0.25
+
+  leg_velocity_actions: true
+  leg_position_scale: 0.08
+  max_leg_velocity: 0.40
+  leg_action_smoothing: 0.18
+  leg_action_rate_limit: 0.04
+  leg_drive_stiffness: 120.0
+  leg_drive_damping: 12.0
+  leg_drive_max_force: 20.0
+  leg_drive_max_velocity: 0.50

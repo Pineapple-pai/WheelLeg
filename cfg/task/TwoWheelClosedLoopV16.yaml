@@ -1,0 +1,90 @@
+defaults:
+  - TwoWheelClosedLoopV11
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v16
+
+# V15 moved the command range too fast and saturated the balance baseline. This
+# run keeps the robot in an achievable speed band and lets the policy learn the
+# same-direction wheel residual instead of relying on a nearly-clamped baseline.
+command_curriculum_end_frame: 49152000
+lin_vel_curriculum_start: [-0.08, 0.08]
+lin_vel_curriculum_end: [-0.35, 0.35]
+lin_vel_range: [-0.35, 0.35]
+command_min_move_speed: 0.08
+command_active_vx: 0.04
+command_zero_prob: 0.10
+command_yaw_only_prob: 0.02
+command_mixed_prob: 0.02
+
+disturbance_curriculum_start_frame: 80000000
+disturbance_curriculum_end_frame: 120000000
+leg_policy_curriculum_end_frame: 200000000
+leg_policy_scale_start: 0.001
+leg_policy_scale_end: 0.12
+
+# Reward translation, but avoid killing the posture gate before locomotion is
+# learnable. The wheel-command term gives a direct target for common wheel speed.
+reward_tracking_lin_vel_weight: 26.0
+reward_tracking_lin_vel_soft_weight: 10.0
+tracking_soft_sigma: 0.18
+reward_tracking_lin_vel_enhance_weight: 8.0
+reward_velocity_weight: 10.0
+reward_normalized_lin_vel_weight: 36.0
+normalized_lin_vel_sigma: 0.09
+penalty_active_velocity_error_weight: 6.0
+penalty_lin_vel_tracking_square_weight: 2.0
+lin_vel_tracking_square_scale: 0.30
+reward_wheel_command_tracking_weight: 14.0
+wheel_command_tracking_sigma: 0.055
+tracking_sigma: 0.040
+reward_command_action_alignment_weight: 10.0
+command_action_alignment_end_frame: 49152000
+reward_direction_weight: 1.0
+reward_forward_progress_weight: 3.0
+reward_displacement_progress_weight: 1.5
+reward_velocity_progress_weight: 40.0
+penalty_forward_deficit_weight: 3.0
+penalty_speed_shortfall_weight: 1.5
+
+# Keep straight-line penalties, but stop overpaying static balance.
+reward_stand_weight: 36.0
+reward_upright_weight: 38.0
+reward_height_weight: 44.0
+reward_settle_weight: 8.0
+penalty_roll_weight: 320.0
+penalty_roll_rate_weight: 12.0
+penalty_position_weight: 8.0
+penalty_wheel_delta_weight: 5.0
+penalty_wheel_common_delta_weight: 6.0
+penalty_wheel_diff_delta_weight: 4.0
+penalty_wheel_vel_diff_weight: 9.0
+penalty_action_diff_weight: 3.5
+penalty_translation_wheel_diff_weight: 20.0
+penalty_translation_action_diff_weight: 8.0
+penalty_yaw_rate_drift_weight: 5.0
+penalty_yaw_rate_weight: 3.0
+penalty_wheel_action_accel_weight: 0.6
+penalty_smoothness_weight: 0.25
+penalty_action_accel_weight: 0.05
+penalty_policy_wheel_residual_weight: 0.004
+
+# Balance should stabilize roll; feedforward and policy residual own translation.
+wheel_balance_track_velocity_command: false
+wheel_balance_roll_kp: 10.0
+wheel_balance_roll_kd: 2.0
+wheel_balance_velocity_kd: 0.12
+wheel_balance_velocity_feedback_sign: 1.0
+wheel_command_feedforward_gain: 0.9
+wheel_residual_curriculum_enabled: true
+wheel_residual_curriculum_start_frame: 0
+wheel_residual_curriculum_end_frame: 24576000
+wheel_residual_scale_start: 0.45
+wheel_residual_scale_end: 0.85
+
+robot:
+  action_smoothing: 0.42
+  action_rate_limit: 0.34
+  action_accel_limit: 0.20
+  leg_action_rate_limit: 0.010

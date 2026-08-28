@@ -151,6 +151,12 @@ def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
     ]
     loop_errors = []
     for prim in loop_joints:
+        if prim.HasAPI(UsdPhysics.DriveAPI, "angular"):
+            loop_errors.append(f"{prim.GetPath()} loop closure has an angular drive")
+        if prim.GetAttribute("physics:lowerLimit").HasAuthoredValueOpinion() or prim.GetAttribute(
+            "physics:upperLimit"
+        ).HasAuthoredValueOpinion():
+            loop_errors.append(f"{prim.GetPath()} loop closure has arbitrary angle limits")
         points = []
         axes = []
         for index in (0, 1):
@@ -173,7 +179,7 @@ def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
                 "Y": Gf.Vec3d(0, 1, 0),
                 "Z": Gf.Vec3d(0, 0, 1),
             }[axis_name]
-            axes.append((body_world.ExtractRotation() * joint_rotation).TransformDir(axis))
+            axes.append((joint_rotation * body_world.ExtractRotation()).TransformDir(axis))
         if len(points) == 2 and len(axes) == 2:
             residual = (points[0] - points[1]).GetLength()
             alignment = abs(axes[0].GetNormalized() * axes[1].GetNormalized())
@@ -187,6 +193,8 @@ def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
                 )
     bad_drives = []
     for prim in joints:
+        if not prim.HasAPI(UsdPhysics.DriveAPI, "angular"):
+            continue
         stiffness = prim.GetAttribute("drive:angular:physics:stiffness").Get()
         damping = prim.GetAttribute("drive:angular:physics:damping").Get()
         max_force = prim.GetAttribute("drive:angular:physics:maxForce").Get()
@@ -211,8 +219,8 @@ def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
         )
     failures = 0
     closure_status = stage.GetDefaultPrim().GetCustomDataByKey("uz05:cadClosureStatus")
-    if closure_status and str(closure_status).startswith("repaired_") and len(loop_joints) != 2:
-        print(f"  FAIL repaired CAD expects 2 loop joints, found {len(loop_joints)}")
+    if closure_status and str(closure_status).startswith("repaired_") and len(loop_joints) != 4:
+        print(f"  FAIL repaired CAD expects 4 loop joints, found {len(loop_joints)}")
         failures += 1
     if loop_errors:
         print("  FAIL invalid loop joints: " + "; ".join(loop_errors))
@@ -225,7 +233,7 @@ def audit_usd(path: Path, reset_height: float) -> tuple[int, bool]:
         failures += 1
     if any(path_.endswith("/base_link/collisions") for _, _, path_, _, _ in collisions):
         print("  WARN base_link uses one convex hull; cavities are filled by the approximation")
-    valid_closed_loops = len(loop_joints) == 2 and not loop_errors
+    valid_closed_loops = len(loop_joints) == 4 and not loop_errors
     return failures, valid_closed_loops
 
 
@@ -245,7 +253,7 @@ def main() -> int:
     print("  fixed-leg standing: CONDITIONAL (simulation regression only)")
     print("  wheel translation: BLOCKED until wheel contact/slip is validated")
     if valid_closed_loops:
-        print("  actuated-leg standing: BLOCKED until the USD closed loop passes an Isaac/PhysX motion sweep")
+        print("  actuated-leg standing: CONDITIONAL (static loop valid; run sweep_uz05_closed_loop.py)")
         print("  jumping: BLOCKED by unmeasured actuator limits and landing/contact validation")
     else:
         print("  actuated-leg standing and jumping: BLOCKED by missing closed-loop and actuator model")

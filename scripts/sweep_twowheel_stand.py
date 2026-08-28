@@ -1,5 +1,9 @@
 import ast
 import os
+import sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
 import hydra
 import torch
@@ -57,10 +61,10 @@ def main(cfg):
     cfg.task.terminate_on_body_contact = False
 
     simulation_app = init_simulation_app(cfg)
+    from omni_drones.envs import resolve_env_class
 
-    from omni_drones.envs.isaac_env import IsaacEnv
 
-    env_class = IsaacEnv.REGISTRY[cfg.task.name]
+    env_class = resolve_env_class(cfg.task.name)
     env = env_class(cfg, headless=cfg.headless).eval()
     env.set_seed(cfg.seed)
 

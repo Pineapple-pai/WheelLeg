@@ -1,1 +1,1 @@
-from .balance import TwoWheelBalance
+from .balance import TwoWheelBalance, TwoWheelClosedLoop

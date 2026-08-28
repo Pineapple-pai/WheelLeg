@@ -1,7 +1,11 @@
 import logging
 import os
+import sys
 import time
 import weakref
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
 import hydra
 import torch
@@ -137,13 +141,13 @@ def main(cfg):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
     simulation_app = init_simulation_app(cfg)
+    from omni_drones.envs import resolve_env_class
+
 
     setproctitle(cfg.task.name)
     print(OmegaConf.to_yaml(cfg))
 
-    from omni_drones.envs.isaac_env import IsaacEnv
-
-    env_class = IsaacEnv.REGISTRY[cfg.task.name]
+    env_class = resolve_env_class(cfg.task.name)
     base_env = env_class(cfg, headless=cfg.headless)
 
     transforms = [InitTracker()]
@@ -203,6 +207,8 @@ def main(cfg):
     base_env.enable_render(not cfg.headless)
     base_env.eval()
     env.eval()
+    if not cfg.headless:
+        base_env.debug_draw.grid(size=10.0, step=0.5, z=0.0)
     keyboard_control = bool(cfg.get("keyboard_control", False))
     if keyboard_control and cfg.headless:
         raise ValueError("keyboard_control=true requires headless=false")

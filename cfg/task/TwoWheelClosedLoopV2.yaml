@@ -1,0 +1,22 @@
+defaults:
+  - TwoWheelClosedLoop
+  - _self_
+
+# Keep the registered environment class while versioning the experiment config.
+name: TwoWheelClosedLoop
+
+# V1 terminated after roughly two policy steps because the closed-loop legs
+# settle from 0.084 m to about 0.044 m before an untrained policy can recover.
+# Start clear of the wheel contact and terminate only below the measured
+# low-resting pose. Roll termination remains the primary fall detector.
+reset_height: 0.088
+min_height: 0.035
+height_floor: 0.060
+termination_roll: 0.32
+penalty_low_height_weight: 20.0
+
+robot:
+  # The original +/-0.10 rad range cannot meaningfully reconfigure the closed
+  # loop from its zero pose. Rated torque, velocity and action-rate limits are
+  # unchanged, so the larger target range is still approached gradually.
+  leg_position_scale: 0.30

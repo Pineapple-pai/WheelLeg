@@ -1,7 +1,7 @@
 import os.path as osp
 import logging
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Sequence, Union
 
 import omni.isaac.core.utils.prims as prim_utils
 import torch
@@ -31,11 +31,15 @@ class TwoWheelRobotCfg(RobotCfg):
     wheel_action_decimation: int = 1
     wheel_action_deadband: float = 0.0
     wheel_action_hold_threshold: float = 0.0
-    wheel_velocity_sign: float = 1.0
+    wheel_velocity_sign: Union[float, Sequence[float]] = 1.0
+    wheel_effort_actions: bool = False
+    wheel_effort_limit: float = 0.0
+    wheel_speed_guard_ratio: float = 0.1
     leg_position_scale: float = 0.25
     max_leg_velocity: float = 1.5
     leg_action_smoothing: float = 0.25
     leg_action_rate_limit: float = 0.10
+    leg_velocity_actions: bool = True
     lock_leg_actions: bool = False
     wheel_drive_stiffness: float = -1.0
     wheel_drive_damping: float = -1.0
@@ -50,6 +54,7 @@ class TwoWheelRobotCfg(RobotCfg):
     passive_drive_damping: float = -1.0
     passive_drive_max_force: float = -1.0
     passive_drive_max_velocity: float = -1.0
+    passive_joint_friction: float = -1.0
 
 
 class TwoWheelRobot(RobotBase):
@@ -68,11 +73,26 @@ class TwoWheelRobot(RobotBase):
         self.wheel_action_decimation = max(1, int(self.cfg.wheel_action_decimation))
         self.wheel_action_deadband = float(self.cfg.wheel_action_deadband)
         self.wheel_action_hold_threshold = float(self.cfg.wheel_action_hold_threshold)
-        self.wheel_velocity_sign = float(self.cfg.wheel_velocity_sign)
+        wheel_velocity_sign = torch.as_tensor(
+            self.cfg.wheel_velocity_sign,
+            dtype=torch.float32,
+            device=self.device,
+        ).flatten()
+        if wheel_velocity_sign.numel() == 1:
+            wheel_velocity_sign = wheel_velocity_sign.repeat(2)
+        if wheel_velocity_sign.numel() != 2:
+            raise ValueError(
+                "wheel_velocity_sign must be a scalar or [left_sign, right_sign]"
+            )
+        self.wheel_velocity_sign = wheel_velocity_sign.reshape(1, 1, 2)
+        self.wheel_effort_actions = bool(self.cfg.wheel_effort_actions)
+        self.wheel_effort_limit = float(self.cfg.wheel_effort_limit)
+        self.wheel_speed_guard_ratio = max(0.0, float(self.cfg.wheel_speed_guard_ratio))
         self.leg_position_scale = float(self.cfg.leg_position_scale)
         self.max_leg_velocity = float(self.cfg.max_leg_velocity)
         self.leg_action_smoothing = float(self.cfg.leg_action_smoothing)
         self.leg_action_rate_limit = float(self.cfg.leg_action_rate_limit)
+        self.leg_velocity_actions = bool(self.cfg.leg_velocity_actions)
         self.lock_leg_actions = bool(self.cfg.lock_leg_actions)
         self.wheel_drive_stiffness = float(self.cfg.wheel_drive_stiffness)
         self.wheel_drive_damping = float(self.cfg.wheel_drive_damping)
@@ -87,6 +107,7 @@ class TwoWheelRobot(RobotBase):
         self.passive_drive_damping = float(self.cfg.passive_drive_damping)
         self.passive_drive_max_force = float(self.cfg.passive_drive_max_force)
         self.passive_drive_max_velocity = float(self.cfg.passive_drive_max_velocity)
+        self.passive_joint_friction = float(self.cfg.passive_joint_friction)
         self._action_step = 0
 
         self.num_leg_joints = len(self.leg_joint_names)
@@ -97,7 +118,7 @@ class TwoWheelRobot(RobotBase):
         self._action_spec = BoundedTensorSpec(
             -1.0,
             1.0,
-            2 + 2 * self.num_leg_joints,
+            2 + self.num_leg_joints * (2 if self.leg_velocity_actions else 1),
             device=self.device,
         )
 
@@ -296,12 +317,29 @@ class TwoWheelRobot(RobotBase):
                 self.passive_drive_max_force,
                 self.passive_drive_max_velocity,
             )
+            if self.passive_joint_friction >= 0.0:
+                friction = torch.full(
+                    (self._view.count, len(self.passive_joint_indices)),
+                    self.passive_joint_friction,
+                    dtype=torch.float32,
+                )
+                self._view.set_friction_coefficients(
+                    friction,
+                    joint_indices=self.passive_joint_indices.cpu(),
+                )
+                logger.info(
+                    "passive joint friction override: %.6g",
+                    self.passive_joint_friction,
+                )
 
     def apply_action(self, actions: torch.Tensor) -> torch.Tensor:
         actions = actions.clamp(-1.0, 1.0).expand(*self.shape, self.action_spec.shape[-1])
         wheel_actions = actions[..., :2]
         leg_pos_actions = actions[..., 2:2 + self.num_leg_joints]
-        leg_vel_actions = actions[..., 2 + self.num_leg_joints:]
+        if self.leg_velocity_actions:
+            leg_vel_actions = actions[..., 2 + self.num_leg_joints:]
+        else:
+            leg_vel_actions = torch.zeros_like(leg_pos_actions)
 
         smoothed_wheel_actions = self.smoothed_action[..., :2]
         update_wheel_action = self._action_step % self.wheel_action_decimation == 0
@@ -345,7 +383,10 @@ class TwoWheelRobot(RobotBase):
                 leg_pos_actions = torch.zeros_like(leg_pos_actions)
                 leg_vel_actions = torch.zeros_like(leg_vel_actions)
             smoothed_leg_pos_actions = self.smoothed_action[..., 2:2 + self.num_leg_joints]
-            smoothed_leg_vel_actions = self.smoothed_action[..., 2 + self.num_leg_joints:]
+            if self.leg_velocity_actions:
+                smoothed_leg_vel_actions = self.smoothed_action[..., 2 + self.num_leg_joints:]
+            else:
+                smoothed_leg_vel_actions = torch.zeros_like(leg_pos_actions)
             if self.leg_action_smoothing < 1.0:
                 leg_pos_actions = smoothed_leg_pos_actions + self.leg_action_smoothing * (
                     leg_pos_actions - smoothed_leg_pos_actions
@@ -369,13 +410,35 @@ class TwoWheelRobot(RobotBase):
             )
             self.leg_velocity_targets[:] = leg_vel_actions * self.max_leg_velocity
 
-        filtered_actions = torch.cat([wheel_actions, leg_pos_actions, leg_vel_actions], dim=-1)
+        filtered_parts = [wheel_actions, leg_pos_actions]
+        if self.leg_velocity_actions:
+            filtered_parts.append(leg_vel_actions)
+        filtered_actions = torch.cat(filtered_parts, dim=-1)
         self.smoothed_action[:] = filtered_actions
-        target_vel = wheel_actions * self.max_wheel_velocity * self.wheel_velocity_sign
-        self._view.set_joint_velocity_targets(
-            target_vel,
-            joint_indices=self.wheel_joint_indices,
-        )
+        if self.wheel_effort_actions:
+            effort_limit = self.wheel_effort_limit
+            if effort_limit <= 0.0:
+                effort_limit = self.wheel_drive_max_force
+            wheel_efforts = wheel_actions * effort_limit * self.wheel_velocity_sign
+            if self.max_wheel_velocity > 0.0 and self.wheel_speed_guard_ratio > 0.0:
+                guard_width = self.max_wheel_velocity * self.wheel_speed_guard_ratio
+                speed_scale = (
+                    (self.max_wheel_velocity - self.wheel_vel.abs()) / guard_width
+                ).clamp(0.0, 1.0)
+                accelerating = wheel_efforts * self.wheel_vel > 0.0
+                wheel_efforts = torch.where(
+                    accelerating, wheel_efforts * speed_scale, wheel_efforts
+                )
+            self._view.set_joint_efforts(
+                wheel_efforts,
+                joint_indices=self.wheel_joint_indices,
+            )
+        else:
+            target_vel = wheel_actions * self.max_wheel_velocity * self.wheel_velocity_sign
+            self._view.set_joint_velocity_targets(
+                target_vel,
+                joint_indices=self.wheel_joint_indices,
+            )
         if self.num_leg_joints:
             self._view.set_joint_position_targets(
                 self.leg_position_targets,

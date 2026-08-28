@@ -19,4 +19,19 @@ Generated static repair assets:
 - `omni_drones/robots/assets/twowheel_uz05/urdf/twowheel_uz05.cad_repaired.urdf`
 - `omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda`
 
-The URDF intentionally remains an open tree because URDF cannot represent this mechanism's closed loops directly. The USD repairs the confirmed right-crank joint type, angular-unit error, finite simulation drives, wheel material, and two excluded revolute loop constraints. The loop anchors were recovered independently from matching mesh holes; their authored anchor residuals are below `3e-9 m` with parallel axes. Hardware limits and actuator curves remain unknown.
+The active assembly contains 20T-to-20T chain stages, so those stages have a
+geometric ratio of 1:1. Hardware information supplied after extraction gives a
+wheel ratio of `268/17 = 15.7647059:1`; the joint-motor datasheet gives an
+integrated ratio of `9:1`, with 20/40 Nm rated/peak output torque. These values
+still require a motor-turn/output-turn check, and peak duration, efficiency,
+backlash, direction, and encoder zero remain deployment inputs.
+
+The M3508+C620 wheel datasheet gives 2.46/3.69 Nm rated/stall output torque and
+571/587 rpm rated/no-load output speed. The C620 manual confirms a +/-20 A CAN
+command range and 20 A maximum continuous controller current, so the lower
+10 A motor rated current is used as the initial hardware limit. The conflicting
+2.5 A claimed stall-current row is rejected. C620 cannot absorb regenerative
+current; hardware requires a braking/absorption module that clamps the DC bus
+to 35 V or below.
+
+The URDF intentionally remains an open tree because URDF cannot represent this mechanism's closed loops directly. The USD repairs the confirmed right-crank joint type, angular-unit error, finite simulation drives, wheel material, and four excluded revolute loop constraints. The second closure on each side (`L45/R45` to `L234/R234`) was recovered from a common transverse hole axis independently fitted in all four link meshes. Hardware limits and actuator curves remain unknown.

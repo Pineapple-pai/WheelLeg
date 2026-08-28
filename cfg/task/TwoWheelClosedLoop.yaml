@@ -1,0 +1,107 @@
+defaults:
+  - TwoWheelBalance
+  - _self_
+
+name: TwoWheelClosedLoop
+
+robot:
+  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda
+  # Rated M3508 gearbox output torque. The 3.69 Nm stall value is not a
+  # continuous operating limit and is intentionally unavailable to the policy.
+  wheel_drive_max_force: 2.46
+  # Current/torque control is the deployable balancing interface. The previous
+  # velocity drive saturated its torque at roughly 3% policy action.
+  wheel_effort_actions: true
+  wheel_effort_limit: 2.46
+  wheel_speed_guard_ratio: 0.10
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 0.0
+  wheel_drive_max_velocity: 20.0
+  # Two base-mounted input shafts per side. Internal linkage coordinates are
+  # passive and are solved by the four USD loop constraints.
+  leg_joint_names: [LL, Lcrank, RL, Rcrank]
+  leg_velocity_actions: false
+  leg_position_scale: 0.10
+  max_leg_velocity: 0.50
+  leg_action_smoothing: 0.10
+  leg_action_rate_limit: 0.02
+  lock_leg_actions: false
+  lock_passive_joints: false
+  leg_drive_stiffness: 120.0
+  leg_drive_damping: 12.0
+  # Rated joint-motor output torque; peak duration is still unknown.
+  leg_drive_max_force: 20.0
+  leg_drive_max_velocity: 0.50
+  passive_drive_stiffness: -1.0
+  passive_drive_damping: -1.0
+  passive_drive_max_force: -1.0
+  passive_drive_max_velocity: -1.0
+
+stand_joint_pos: [0.0, 0.0, 0.0, 0.0]
+
+# Reward profile adapted from scutrobotlab/wheeled-legged_RL and
+# yly-true/fudan_rl_wheel_leg. The move stage keeps zero-command episodes so
+# velocity fine-tuning does not erase the standing policy.
+command_zero_prob: 0.25
+posture_multiplier_end: 0.35
+
+# One safety/standing backbone plus one locomotion reward family. Disable the
+# older duplicate pose/height terms inherited from TwoWheelBalance.
+reward_alive_weight: 0.5
+reward_stand_weight: 8.0
+reward_upright_weight: 0.0
+reward_height_weight: 0.0
+reward_settle_weight: 2.0
+reward_leg_neutral_weight: 1.0
+penalty_fall_weight: 50.0
+
+penalty_roll_weight: 0.0
+penalty_roll_rate_weight: 0.0
+penalty_pitch_weight: 0.0
+penalty_pitch_rate_weight: 0.0
+penalty_lin_vel_z_weight: 0.0
+penalty_action_weight: 0.0
+penalty_smoothness_weight: 0.0
+penalty_action_accel_weight: 0.0
+penalty_leg_pos_weight: 0.0
+penalty_leg_vel_weight: 0.0
+penalty_leg_action_weight: 0.0
+penalty_leg_action_diff_weight: 0.0
+
+# Do not penalize wheel speed during translation. The zero-command-gated quiet
+# penalty and action derivatives suppress stand-still chatter instead.
+penalty_wheel_speed_weight: 0.0
+penalty_wheel_delta_weight: 0.0
+penalty_wheel_common_delta_weight: 0.0
+penalty_wheel_diff_delta_weight: 0.0
+penalty_wheel_sign_flip_weight: 0.0
+penalty_wheel_action_diff_weight: 0.0
+penalty_wheel_action_accel_weight: 0.0
+penalty_wheel_action_magnitude_weight: 0.0
+penalty_quiet_wheel_weight: 0.5
+
+# Exponential command tracking is gated by stand_reward (orientation and
+# height), following SCUT's velocity reward gating. The target roll already
+# follows forward speed, so leaning to accelerate is not treated as a fall.
+tracking_sigma: 0.04
+reward_tracking_lin_vel_weight: 6.0
+reward_tracking_lin_vel_enhance_weight: 0.0
+reward_tracking_ang_vel_weight: 1.0
+reward_tracking_ang_vel_enhance_weight: 0.0
+reward_base_height_weight: 2.0
+reward_orientation_weight: -8.0
+reward_nominal_state_weight: -1.0
+reward_lin_vel_z_weight: -1.0
+reward_ang_vel_xy_weight: -0.2
+
+# Sim-to-real regularizers borrowed from both projects. effort is the bounded
+# actuator command proxy in this environment, not measured electrical power.
+reward_dof_vel_weight: -2.0e-5
+reward_dof_acc_weight: -1.0e-7
+reward_torques_weight: -5.0e-4
+reward_action_rate_weight: -0.02
+reward_action_smooth_weight: -0.04
+# Isaac 4.0 does not provide reliable per-link forces for this articulation;
+# keep height/attitude termination until contact sensing is validated.
+reward_collision_weight: 0.0
+reward_dof_pos_limits_weight: -2.0

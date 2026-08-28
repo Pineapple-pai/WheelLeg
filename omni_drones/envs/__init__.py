@@ -21,5 +21,20 @@
 # SOFTWARE.
 
 
-from .twowheel import TwoWheelBalance
+from .twowheel import TwoWheelBalance, TwoWheelClosedLoop
 from .isaac_env import IsaacEnv
+
+
+def resolve_env_class(name: str):
+    """Resolve local tasks even if Isaac Sim recreated the registry module."""
+    local_tasks = {
+        TwoWheelBalance.__name__: TwoWheelBalance,
+        TwoWheelBalance.__name__.lower(): TwoWheelBalance,
+        TwoWheelClosedLoop.__name__: TwoWheelClosedLoop,
+        TwoWheelClosedLoop.__name__.lower(): TwoWheelClosedLoop,
+    }
+    env_class = IsaacEnv.REGISTRY.get(name) or local_tasks.get(name)
+    if env_class is None:
+        available = sorted(set(IsaacEnv.REGISTRY) | set(local_tasks))
+        raise KeyError(f"Unknown task {name!r}. Available tasks: {available}")
+    return env_class

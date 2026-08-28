@@ -1,0 +1,91 @@
+defaults:
+  - TwoWheelClosedLoopV10
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v11
+
+# V10 was too comfortable: the command curriculum outlived a 3000-iteration
+# run, and near-zero motion could still collect most posture reward. V11 is a
+# movement-biased run: it keeps posture as a gate, but makes active translation
+# common and costly to ignore.
+command_curriculum_end_frame: 49152000
+lin_vel_curriculum_start: [-0.10, 0.10]
+lin_vel_curriculum_end: [-0.40, 0.40]
+lin_vel_range: [-0.40, 0.40]
+command_min_move_speed: 0.07
+command_active_vx: 0.04
+command_zero_prob: 0.12
+command_yaw_only_prob: 0.02
+command_mixed_prob: 0.02
+
+# Keep perturbations out of this consolidation run. Legs remain available but
+# muted, so the wheel velocity controller must learn the translation mapping.
+disturbance_curriculum_start_frame: 80000000
+disturbance_curriculum_end_frame: 120000000
+leg_policy_curriculum_end_frame: 200000000
+leg_policy_scale_start: 0.001
+leg_policy_scale_end: 0.18
+
+# Stronger low-speed translation objective. These terms are stand_reward-gated
+# in code, so falling or leaning badly cannot become an alternate solution.
+reward_tracking_lin_vel_weight: 22.0
+reward_tracking_lin_vel_soft_weight: 8.0
+tracking_soft_sigma: 0.16
+reward_tracking_lin_vel_enhance_weight: 8.0
+reward_velocity_weight: 8.0
+reward_normalized_lin_vel_weight: 32.0
+normalized_lin_vel_sigma: 0.10
+penalty_active_velocity_error_weight: 5.0
+penalty_lin_vel_tracking_square_weight: 4.0
+lin_vel_tracking_square_scale: 0.35
+reward_wheel_command_tracking_weight: 6.0
+wheel_command_tracking_sigma: 0.045
+tracking_sigma: 0.035
+reward_command_action_alignment_weight: 12.0
+command_action_alignment_end_frame: 60000000
+reward_direction_weight: 0.4
+reward_forward_progress_weight: 2.0
+reward_displacement_progress_weight: 1.0
+reward_velocity_progress_weight: 35.0
+penalty_forward_deficit_weight: 3.0
+penalty_speed_shortfall_weight: 2.0
+
+# Keep the standing envelope that V10 achieved.
+reward_stand_weight: 42.0
+reward_upright_weight: 42.0
+reward_height_weight: 46.0
+reward_settle_weight: 10.0
+penalty_roll_weight: 360.0
+penalty_roll_rate_weight: 14.0
+penalty_position_weight: 8.0
+penalty_wheel_delta_weight: 6.0
+penalty_wheel_common_delta_weight: 8.0
+penalty_wheel_diff_delta_weight: 4.0
+penalty_wheel_vel_diff_weight: 10.0
+penalty_action_diff_weight: 4.0
+penalty_translation_wheel_diff_weight: 28.0
+penalty_translation_action_diff_weight: 10.0
+penalty_yaw_rate_drift_weight: 8.0
+penalty_yaw_rate_weight: 4.0
+penalty_wheel_action_accel_weight: 0.8
+penalty_smoothness_weight: 0.35
+penalty_action_accel_weight: 0.08
+penalty_policy_wheel_residual_weight: 0.02
+wheel_balance_track_velocity_command: true
+wheel_balance_roll_kp: 14.0
+wheel_balance_roll_kd: 2.4
+wheel_balance_velocity_kd: 0.20
+wheel_balance_velocity_feedback_sign: -1.0
+wheel_command_feedforward_gain: 1.6
+wheel_residual_curriculum_enabled: true
+wheel_residual_curriculum_start_frame: 0
+wheel_residual_curriculum_end_frame: 49152000
+wheel_residual_scale_start: 0.20
+wheel_residual_scale_end: 0.50
+
+robot:
+  action_smoothing: 0.42
+  action_rate_limit: 0.38
+  action_accel_limit: 0.28
+  leg_action_rate_limit: 0.012

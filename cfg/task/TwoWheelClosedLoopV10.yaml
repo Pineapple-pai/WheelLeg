@@ -1,0 +1,65 @@
+defaults:
+  - TwoWheelClosedLoopV9
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v10
+
+# V9 fixed the physical forward sign and can generate forward velocity, but the
+# curriculum still asks for too much speed while disturbances and leg freedom are
+# active. V10 is a consolidation run: learn clean, symmetric slow translation
+# first, then widen again in the next version.
+command_curriculum_end_frame: 90000000
+lin_vel_curriculum_start: [-0.04, 0.04]
+lin_vel_curriculum_end: [-0.24, 0.24]
+lin_vel_range: [-0.24, 0.24]
+command_min_move_speed: 0.02
+yaw_rate_curriculum_start: 0.03
+yaw_rate_curriculum_end: 0.16
+max_command_yaw_rate: 0.16
+
+# Preserve standing as an always-present anchor, but keep most environments on
+# translation so the policy cannot solve the batch by standing still.
+command_zero_prob: 0.32
+command_yaw_only_prob: 0.06
+command_mixed_prob: 0.08
+
+# Delay nonessential complexity. The wheel controller should master velocity
+# tracking before disturbance recovery or leg strategy becomes dominant.
+disturbance_curriculum_start_frame: 52000000
+disturbance_curriculum_end_frame: 90000000
+leg_policy_curriculum_end_frame: 120000000
+leg_policy_scale_start: 0.001
+leg_policy_scale_end: 0.55
+
+# Tight standing gate: moving while tilted is not a useful solution.
+reward_stand_weight: 42.0
+reward_upright_weight: 40.0
+reward_height_weight: 50.0
+reward_settle_weight: 14.0
+penalty_roll_weight: 320.0
+penalty_roll_rate_weight: 12.0
+penalty_pitch_rate_weight: 6.0
+
+# Strong low-speed tracking. The broader sigma keeps useful gradients around
+# small target velocities, while the progress/direction terms remain secondary.
+reward_velocity_weight: 14.0
+reward_direction_weight: 0.5
+reward_forward_progress_weight: 2.0
+reward_displacement_progress_weight: 1.0
+reward_tracking_lin_vel_weight: 24.0
+reward_tracking_lin_vel_enhance_weight: 10.0
+reward_tracking_lin_vel_pbrs_weight: 4.0
+reward_velocity_progress_weight: 45.0
+reward_wheel_command_tracking_weight: 6.0
+tracking_sigma: 0.050
+wheel_command_tracking_sigma: 0.045
+wheel_command_feedforward_gain: 1.4
+penalty_policy_wheel_residual_weight: 0.015
+penalty_position_weight: 12.0
+
+robot:
+  action_smoothing: 0.45
+  action_rate_limit: 0.32
+  action_accel_limit: 0.22
+  leg_action_rate_limit: 0.015

@@ -1,0 +1,65 @@
+defaults:
+  - TwoWheelClosedLoopV7
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v8
+
+# V7 stands very well, but by 8M frames it still prefers slow creeping. V8 keeps
+# the same joint task mix and makes the wheel locomotion objective stronger
+# while delaying leg freedom so the policy cannot solve translation by disturbing
+# the stance.
+command_curriculum_end_frame: 60000000
+lin_vel_curriculum_start: [-0.05, 0.05]
+lin_vel_curriculum_end: [-0.42, 0.42]
+lin_vel_range: [-0.42, 0.42]
+command_min_move_speed: 0.025
+yaw_rate_curriculum_start: 0.05
+yaw_rate_curriculum_end: 0.28
+max_command_yaw_rate: 0.28
+
+# Keep enough zero-command samples to preserve standing, but make moving samples
+# the majority of the batch.
+command_zero_prob: 0.28
+command_yaw_only_prob: 0.08
+command_mixed_prob: 0.12
+
+# Let wheels learn the translation map first. The four leg joints stay close to
+# the deployable neutral pose until velocity tracking is useful.
+leg_policy_curriculum_end_frame: 90000000
+leg_policy_scale_start: 0.002
+leg_policy_scale_end: 0.65
+disturbance_curriculum_start_frame: 26000000
+disturbance_curriculum_end_frame: 65000000
+
+# Preserve the successful V7 standing envelope.
+reward_stand_weight: 38.0
+reward_upright_weight: 36.0
+reward_height_weight: 46.0
+reward_settle_weight: 12.0
+penalty_roll_weight: 270.0
+penalty_roll_rate_weight: 10.0
+penalty_pitch_rate_weight: 5.0
+
+# Stronger moving reward, still gated by stand_reward in the environment. Exact
+# velocity tracking and wheel-command tracking are emphasized over merely going
+# in the correct direction.
+reward_velocity_weight: 12.0
+reward_direction_weight: 0.8
+reward_forward_progress_weight: 3.5
+reward_displacement_progress_weight: 1.5
+reward_tracking_lin_vel_weight: 18.0
+reward_tracking_lin_vel_enhance_weight: 8.0
+reward_tracking_lin_vel_pbrs_weight: 5.0
+reward_velocity_progress_weight: 55.0
+reward_wheel_command_tracking_weight: 4.0
+tracking_sigma: 0.035
+wheel_command_tracking_sigma: 0.030
+wheel_command_feedforward_gain: 1.2
+penalty_policy_wheel_residual_weight: 0.02
+
+robot:
+  action_smoothing: 0.48
+  action_rate_limit: 0.35
+  action_accel_limit: 0.25
+  leg_action_rate_limit: 0.02

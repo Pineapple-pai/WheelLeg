@@ -29,9 +29,15 @@ def find_required(value, path=""):
 def validate_ranges(data):
     errors = []
     for side in ("left", "right"):
-        limits = data["kinematics"][side]["hard_stop_rad"]
-        if all(isinstance(value, (int, float)) for value in limits) and limits[0] >= limits[1]:
-            errors.append(f"kinematics.{side}.hard_stop_rad must be [lower, upper]")
+        kinematics = data["kinematics"][side]
+        for joint in ("hip", "knee"):
+            if kinematics[f"{joint}_continuous"] is not True:
+                errors.append(f"kinematics.{side}.{joint}_continuous must remain true")
+            limits = kinematics[f"{joint}_safe_operating_range_rad"]
+            if all(isinstance(value, (int, float)) for value in limits) and limits[0] >= limits[1]:
+                errors.append(
+                    f"kinematics.{side}.{joint}_safe_operating_range_rad must be [lower, upper]"
+                )
 
     positive_paths = [
         "contact.wheel_radius_m",
@@ -81,6 +87,10 @@ def validate_ranges(data):
         errors.append("control.motor_control_rate_hz must be >= policy_rate_hz")
     if data["safety"]["hardware_test_requires_support_rig"] is not True:
         errors.append("safety.hardware_test_requires_support_rig must remain true")
+    if data["safety"]["wheel_regenerative_absorber_required"] is not True:
+        errors.append("safety.wheel_regenerative_absorber_required must remain true")
+    if data["safety"]["wheel_bus_clamp_max_v"] > 35.0:
+        errors.append("safety.wheel_bus_clamp_max_v must be <= 35 V")
 
     for field in ("components_csv", "mates_csv", "geometry_step", "mass_report"):
         path = Path(data["source"][field]).expanduser()

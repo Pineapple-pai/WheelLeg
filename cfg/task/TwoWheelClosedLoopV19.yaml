@@ -1,0 +1,68 @@
+defaults:
+  - TwoWheelClosedLoopV18
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v19
+
+# V18 reduced wheel saturation but still used too much roll to get motion.
+# V19 is a low-speed straight-line consolidation run: keep posture tight first,
+# then let the policy learn useful common wheel motion inside that envelope.
+lin_vel_curriculum_start: [-0.03, 0.03]
+lin_vel_curriculum_end: [-0.14, 0.14]
+lin_vel_range: [-0.14, 0.14]
+command_min_move_speed: 0.03
+command_active_vx: 0.020
+command_zero_prob: 0.05
+
+command_balance_gain: 0.08
+command_balance_limit: 0.04
+command_balance_sign: -1.0
+command_balance_from_velocity_error: false
+
+reward_stand_weight: 46.0
+reward_upright_weight: 50.0
+reward_height_weight: 48.0
+reward_settle_weight: 8.0
+penalty_roll_weight: 520.0
+penalty_roll_rate_weight: 18.0
+penalty_position_weight: 4.0
+
+reward_tracking_lin_vel_weight: 26.0
+reward_tracking_lin_vel_soft_weight: 14.0
+tracking_soft_sigma: 0.18
+reward_velocity_weight: 8.0
+reward_normalized_lin_vel_weight: 36.0
+penalty_active_velocity_error_weight: 6.0
+penalty_lin_vel_tracking_square_weight: 2.5
+reward_direction_weight: 4.0
+reward_forward_progress_weight: 5.0
+reward_displacement_progress_weight: 2.5
+reward_velocity_progress_weight: 25.0
+
+reward_wheel_command_tracking_weight: 16.0
+wheel_command_tracking_sigma: 0.050
+reward_command_action_alignment_weight: 4.0
+
+penalty_translation_wheel_diff_weight: 60.0
+penalty_translation_action_diff_weight: 14.0
+penalty_yaw_rate_drift_weight: 24.0
+penalty_wheel_vel_diff_weight: 20.0
+penalty_wheel_diff_delta_weight: 8.0
+penalty_policy_wheel_residual_weight: 0.03
+
+wheel_balance_roll_kp: 4.0
+wheel_balance_roll_kd: 0.9
+wheel_balance_velocity_kd: 0.02
+wheel_balance_baseline_limit: 0.25
+wheel_balance_feedforward_limit: 0.08
+wheel_balance_yaw_limit: 0.04
+wheel_command_feedforward_gain: 0.45
+wheel_residual_scale_start: 0.03
+wheel_residual_scale_end: 0.18
+
+robot:
+  action_smoothing: 0.42
+  action_rate_limit: 0.28
+  action_accel_limit: 0.16
+  leg_action_rate_limit: 0.006

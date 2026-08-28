@@ -1,4 +1,8 @@
 import os
+import sys
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
 import hydra
 import torch
@@ -20,10 +24,10 @@ def main(cfg):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
     simulation_app = init_simulation_app(cfg)
+    from omni_drones.envs import resolve_env_class
 
-    from omni_drones.envs.isaac_env import IsaacEnv
 
-    env_class = IsaacEnv.REGISTRY[cfg.task.name]
+    env_class = resolve_env_class(cfg.task.name)
     base_env = env_class(cfg, headless=cfg.headless)
 
     transforms = [InitTracker()]
@@ -55,13 +59,14 @@ def main(cfg):
         flush=True,
     )
     print(
-        "step, roll, pitch, yaw, height, forward_vy, lateral_vx, wz, wheel_l, wheel_r, "
+        "step, command_vx, roll, pitch, yaw, height, raw_vy, signed_forward_v, lateral_vx, wz, wheel_l, wheel_r, "
         "wheel_l_rad_s, wheel_r_rad_s, expected_no_slip_v, slip_v, slip_ratio, "
         "act_l, act_r, leg_pos_norm, leg_vel_norm, leg_act_norm, reward, done",
         flush=True,
     )
     wheel_radius = float(cfg.task.robot.get("wheel_radius", 0.06))
     wheel_rolling_sign = float(cfg.task.robot.get("wheel_rolling_sign", -1.0))
+    forward_axis_sign = float(cfg.task.get("forward_axis_sign", 1.0))
     prev_wheel = None
     prev_action = None
     prev_action_delta = None
@@ -87,16 +92,19 @@ def main(cfg):
             leg_act_norm = action_vec[2:].norm().item() if action_vec.numel() > 2 else 0.0
             wheel_rad_s = base_env.robot.wheel_vel[0, 0].detach().cpu()
             expected_no_slip_v = wheel_rolling_sign * wheel_radius * wheel_rad_s.mean().item()
-            slip_v = expected_no_slip_v - obs[5].item()
+            signed_forward_v = forward_axis_sign * obs[5].item()
+            slip_v = expected_no_slip_v - signed_forward_v
             slip_ratio = abs(slip_v) / max(abs(expected_no_slip_v), 0.05)
             sum_abs_slip += abs(slip_v)
             sum_slip_ratio += slip_ratio
             values = {
+                "command_vx": base_env.command[0, 0].detach().cpu().item(),
                 "roll": obs[0].item(),
                 "pitch": obs[1].item(),
                 "yaw": obs[2].item(),
                 "height": obs[3].item(),
-                "forward_vy": obs[5].item(),
+                "raw_vy": obs[5].item(),
+                "signed_forward_v": signed_forward_v,
                 "lateral_vx": obs[4].item(),
                 "wz": obs[9].item(),
                 "wheel_l": obs[10].item(),
@@ -135,9 +143,10 @@ def main(cfg):
             measured_steps += 1
             if step % print_every == 0 or done:
                 print(
-                    f"{step}, {values['roll']:.4f}, {values['pitch']:.4f}, {values['yaw']:.4f}, "
-                    f"{values['height']:.4f}, {values['forward_vy']:.4f}, "
-                    f"{values['lateral_vx']:.4f}, {values['wz']:.4f}, "
+                    f"{step}, {values['command_vx']:.4f}, "
+                    f"{values['roll']:.4f}, {values['pitch']:.4f}, {values['yaw']:.4f}, "
+                    f"{values['height']:.4f}, {values['raw_vy']:.4f}, "
+                    f"{values['signed_forward_v']:.4f}, {values['lateral_vx']:.4f}, {values['wz']:.4f}, "
                     f"{values['wheel_l']:.4f}, {values['wheel_r']:.4f}, "
                     f"{values['wheel_l_rad_s']:.4f}, {values['wheel_r_rad_s']:.4f}, "
                     f"{values['expected_no_slip_v']:.4f}, {values['slip_v']:.4f}, "

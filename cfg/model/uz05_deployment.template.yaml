@@ -23,82 +23,182 @@ kinematics:
     wheel_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
     closure_pivots_xyz_m: REQUIRED
     assembly_branch: REQUIRED
-    hard_stop_rad: [REQUIRED, REQUIRED]
+    hip_continuous: true
+    knee_continuous: true
+    hip_safe_operating_range_rad: [REQUIRED, REQUIRED]
+    knee_safe_operating_range_rad: [REQUIRED, REQUIRED]
   right:
     hip_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
     knee_input_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
     wheel_axis_xyz_m: [REQUIRED, REQUIRED, REQUIRED]
     closure_pivots_xyz_m: REQUIRED
     assembly_branch: REQUIRED
-    hard_stop_rad: [REQUIRED, REQUIRED]
+    hip_continuous: true
+    knee_continuous: true
+    hip_safe_operating_range_rad: [REQUIRED, REQUIRED]
+    knee_safe_operating_range_rad: [REQUIRED, REQUIRED]
+
+joint_motor_datasheet:
+  model: DM-J8009P-2EC
+  rated_voltage_v: 24.0
+  supported_voltage_range_v: [24.0, 48.0]
+  undervoltage_min_v: 15.0
+  recommended_overvoltage_max_v: 52.0
+  rated_current_a: 20.0
+  peak_current_a: 50.0
+  recommended_overcurrent_limit_max_a: 39.0
+  rated_output_torque_nm: 20.0
+  peak_output_torque_nm: 40.0
+  rated_output_speed_rpm: 100.0
+  no_load_output_speed_24v_rpm: 160.0
+  no_load_output_speed_48v_rpm: 320.0
+  reduction: 9.0
+  pole_pairs: 21
+  phase_inductance_uh: 80.0
+  phase_resistance_ohm: 0.145
+  encoder_bits: 14
+  encoder_count: 2
+  output_encoder: magnetic_single_turn_absolute
+  can_bitrate_bps: 1000000
+  can_feedback_position_bits: 16
+  can_feedback_velocity_bits: 12
+  can_feedback_torque_bits: 12
+  can_feedback_includes_mos_temperature: true
+  can_feedback_includes_rotor_temperature: true
+  communication_loss_disable_supported: true
+  uart_bitrate_bps: 921600
+  recommended_temperature_limit_c: 100.0
+  protection_temperature_c: 120.0
+
+wheel_motor_datasheet:
+  model: M3508_gearbox_with_C620
+  rated_voltage_v: 24.0
+  rated_current_a: 10.0
+  claimed_stall_current_a: 2.5
+  claimed_stall_current_is_rejected: true
+  rated_output_torque_nm: 2.46
+  stall_output_torque_nm: 3.69
+  rated_output_speed_rpm: 571.0
+  no_load_output_speed_rpm: 587.0
+  max_efficiency: 0.70
+  mass_kg: 0.3364
+  reduction: 15.764705882353
+  torque_speed_reference: gearbox_output_assumed
+  c620_max_continuous_current_a: 20.0
+  c620_command_current_range_a: [-20.0, 20.0]
+  c620_command_range: [-16384, 16384]
+  c620_command_counts_per_amp: 819.2
+  c620_feedback_rate_hz: 1000
+  motor_encoder_counts_per_rev: 8192
+  c620_ambient_temperature_range_c: [0.0, 50.0]
+  motor_temperature_warning_c: 125.0
+  motor_temperature_fault_c: 180.0
+  regenerative_current_absorption: false
+  required_bus_clamp_max_v: 35.0
 
 actuators:
   left_hip:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: DM-J8009P-2EC
+    reduction: 9.0
+    reduction_source: joint_motor_datasheet_photo
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 10.471975511966
+    no_load_velocity_24v_rad_s: 16.755160819146
+    no_load_velocity_48v_rad_s: 33.510321638291
+    continuous_torque_nm: 20.0
+    peak_torque_nm: 40.0
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 20.0
+    peak_current_a: 50.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 120.0
+    torque_speed_reference: gearbox_output_assumed
   left_knee:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: DM-J8009P-2EC
+    reduction: 9.0
+    reduction_source: joint_motor_datasheet_photo
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 10.471975511966
+    no_load_velocity_24v_rad_s: 16.755160819146
+    no_load_velocity_48v_rad_s: 33.510321638291
+    continuous_torque_nm: 20.0
+    peak_torque_nm: 40.0
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 20.0
+    peak_current_a: 50.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 120.0
+    torque_speed_reference: gearbox_output_assumed
   right_hip:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: DM-J8009P-2EC
+    reduction: 9.0
+    reduction_source: joint_motor_datasheet_photo
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 10.471975511966
+    no_load_velocity_24v_rad_s: 16.755160819146
+    no_load_velocity_48v_rad_s: 33.510321638291
+    continuous_torque_nm: 20.0
+    peak_torque_nm: 40.0
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 20.0
+    peak_current_a: 50.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 120.0
+    torque_speed_reference: gearbox_output_assumed
   right_knee:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: DM-J8009P-2EC
+    reduction: 9.0
+    reduction_source: joint_motor_datasheet_photo
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 10.471975511966
+    no_load_velocity_24v_rad_s: 16.755160819146
+    no_load_velocity_48v_rad_s: 33.510321638291
+    continuous_torque_nm: 20.0
+    peak_torque_nm: 40.0
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 20.0
+    peak_current_a: 50.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 120.0
+    torque_speed_reference: gearbox_output_assumed
   left_wheel:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: M3508_gearbox_with_C620
+    reduction: 15.764705882353
+    reduction_source: measured_or_design_268_over_17
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 59.794980173326
+    no_load_velocity_rad_s: 61.470496255240
+    continuous_torque_nm: 2.46
+    peak_torque_nm: 3.69
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 10.0
+    controller_continuous_current_limit_a: 20.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 125.0
+    fault_temperature_c: 180.0
+    torque_speed_reference: gearbox_output_assumed
   right_wheel:
-    motor_model: REQUIRED
-    reduction: REQUIRED
+    motor_model: M3508_gearbox_with_C620
+    reduction: 15.764705882353
+    reduction_source: measured_or_design_268_over_17
     direction: REQUIRED
     encoder_zero_rad: REQUIRED
-    velocity_limit_rad_s: REQUIRED
-    continuous_torque_nm: REQUIRED
-    peak_torque_nm: REQUIRED
+    velocity_limit_rad_s: 59.794980173326
+    no_load_velocity_rad_s: 61.470496255240
+    continuous_torque_nm: 2.46
+    peak_torque_nm: 3.69
     peak_duration_s: REQUIRED
-    current_limit_a: REQUIRED
-    temperature_limit_c: REQUIRED
+    current_limit_a: 10.0
+    controller_continuous_current_limit_a: 20.0
+    temperature_limit_c: 100.0
+    protection_temperature_c: 125.0
+    fault_temperature_c: 180.0
+    torque_speed_reference: gearbox_output_assumed
 
 contact:
   wheel_radius_m: REQUIRED
@@ -126,4 +226,6 @@ safety:
   max_jump_height_m: REQUIRED
   max_landing_force_n: REQUIRED
   max_bus_power_w: REQUIRED
+  wheel_regenerative_absorber_required: true
+  wheel_bus_clamp_max_v: 35.0
   hardware_test_requires_support_rig: true

@@ -1,6 +1,10 @@
 import logging
 import os
+import sys
 import time
+
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, PROJECT_ROOT)
 
 import hydra
 import torch
@@ -34,52 +38,39 @@ CHECKPOINT_ROOT = os.environ.get(
 )
 
 
-TRACKED_TRAIN_KEYS = (
+TRACKED_STATE_STATS_KEYS = (
     "stats.return",
     "stats.episode_len",
     "reward",
-    "stats.uprightness",
     "stats.roll_error",
-    "stats.roll_rate_error",
-    "stats.pitch_error",
-    "stats.pitch_target",
-    "stats.pitch_tracking_error",
-    "stats.pitch_rate_error",
-    "stats.yaw_error",
-    "stats.yaw_rate_error",
-    "stats.height",
     "stats.height_error",
-    "stats.terminated_roll",
-    "stats.terminated_pitch",
-    "stats.terminated_height",
-    "stats.terminated_xy",
-    "stats.terminated_nan",
     "stats.done",
     "stats.forward_velocity",
     "stats.velocity_error",
-    "stats.forward_progress",
-    "stats.displacement_progress",
-    "stats.position_error",
     "stats.velocity_alignment",
-    "stats.wheel_speed",
-    "stats.wheel_vel_diff",
-    "stats.wheel_delta",
-    "stats.wheel_action_diff",
-    "stats.wheel_action_acceleration",
+    "stats.forward_progress",
     "stats.wheel_action_magnitude",
+    "stats.translation_wheel_diff_penalty",
+    "stats.translation_action_diff_penalty",
+    "stats.yaw_rate_drift_penalty",
+    "stats.balance_baseline_action",
+    "stats.balance_feedforward_action",
+    "stats.policy_wheel_residual",
+    "stats.command_action_alignment",
+    "stats.tracking_lin_vel_soft",
+    "stats.wheel_command_tracking",
+    "stats.normalized_velocity_tracking",
+    "stats.active_velocity_error_penalty",
+    "stats.lin_vel_tracking_square_penalty",
+    "stats.wheel_residual_scale",
+    "stats.leg_policy_scale",
     "stats.leg_pos_error",
     "stats.leg_vel_error",
     "stats.leg_action_magnitude",
-    "stats.leg_action_diff",
-    "stats.quiet_state",
     "stats.stand_reward",
-    "stats.settle_reward",
-    "stats.leg_neutral_reward",
     "stats.command_vx",
-    "stats.command_yaw_rate",
-    "stats.anneal_progress",
-    "stats.tracking_multiplier",
-    "stats.posture_multiplier",
+    "stats.zero_command_fraction",
+    "stats.translation_command_fraction",
 )
 
 TRACKED_UPDATE_KEYS = (
@@ -105,6 +96,12 @@ TRACKED_EVAL_KEYS = (
     "eval/stats.done",
     "eval/stats.forward_velocity",
     "eval/stats.velocity_error",
+    "eval/stats.position_error",
+    "eval/stats.yaw_error",
+    "eval/stats.yaw_rate_error",
+    "eval/stats.balance_baseline_action",
+    "eval/stats.balance_yaw_action",
+    "eval/stats.policy_wheel_residual",
     "eval/stats.quiet_state",
     "eval/stats.leg_neutral_reward",
     "eval/forward/stats.episode_len",
@@ -139,6 +136,12 @@ TRACKED_EVAL_STAND_KEYS = (
     "eval/stats.terminated_xy",
     "eval/stats.forward_velocity",
     "eval/stats.velocity_error",
+    "eval/stats.position_error",
+    "eval/stats.yaw_error",
+    "eval/stats.yaw_rate_error",
+    "eval/stats.balance_baseline_action",
+    "eval/stats.balance_yaw_action",
+    "eval/stats.policy_wheel_residual",
 )
 
 TRACKED_EVAL_FORWARD_KEYS = (
@@ -163,6 +166,35 @@ TRACKED_EVAL_BACKWARD_KEYS = (
     "eval/backward/stats.terminated_xy",
     "eval/backward/stats.forward_velocity",
     "eval/backward/stats.velocity_error",
+)
+
+TRACKED_EVAL_ROBUST_KEYS = (
+    "eval/robust/stats.return",
+    "eval/robust/stats.episode_len",
+    "eval/robust/stats.uprightness",
+    "eval/robust/stats.height",
+    "eval/robust/stats.roll_error",
+    "eval/robust/stats.yaw_error",
+    "eval/robust/stats.forward_velocity",
+    "eval/robust/stats.position_error",
+    "eval/robust/stats.balance_baseline_action",
+    "eval/robust/stats.balance_yaw_action",
+    "eval/robust/stats.policy_wheel_residual",
+)
+
+TRACKED_EVAL_TURN_KEYS = (
+    "eval/turn_left/stats.episode_len",
+    "eval/turn_left/stats.uprightness",
+    "eval/turn_left/stats.height",
+    "eval/turn_left/stats.yaw_rate_error",
+    "eval/turn_left/stats.terminated_roll",
+    "eval/turn_left/stats.terminated_height",
+    "eval/turn_right/stats.episode_len",
+    "eval/turn_right/stats.uprightness",
+    "eval/turn_right/stats.height",
+    "eval/turn_right/stats.yaw_rate_error",
+    "eval/turn_right/stats.terminated_roll",
+    "eval/turn_right/stats.terminated_height",
 )
 
 OBS_STATE_INDICES = {
@@ -258,7 +290,16 @@ def _current_state_from_obs(obs: torch.Tensor):
     obs = obs.detach().float()
     flat = obs.reshape(-1, obs.shape[-1])
     mean_obs = flat.mean(dim=0)
-    return [(name, mean_obs[idx].item()) for name, idx in OBS_STATE_INDICES.items() if idx < mean_obs.numel()]
+    state = [
+        (name, mean_obs[idx].item())
+        for name, idx in OBS_STATE_INDICES.items()
+        if idx < mean_obs.numel()
+    ]
+    for name in ("command_vx", "command_yaw_rate"):
+        idx = OBS_STATE_INDICES[name]
+        if idx < flat.shape[-1]:
+            state.append((f"command_abs_{name.removeprefix('command_')}", flat[:, idx].abs().mean().item()))
+    return state
 
 
 @hydra.main(version_base=None, config_path=".", config_name="train")
@@ -267,13 +308,13 @@ def main(cfg):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
     simulation_app = init_simulation_app(cfg)
+    from omni_drones.envs import resolve_env_class
+
     run = init_wandb(cfg)
     setproctitle(run.name)
     os.makedirs(_checkpoint_dir(cfg), exist_ok=True)
 
-    from omni_drones.envs.isaac_env import IsaacEnv
-
-    env_class = IsaacEnv.REGISTRY[cfg.task.name]
+    env_class = resolve_env_class(cfg.task.name)
     base_env = env_class(cfg, headless=cfg.headless)
 
     transforms = [InitTracker()]
@@ -327,6 +368,10 @@ def main(cfg):
         if isinstance(k, tuple) and k[0]=="stats"
     ]
     episode_stats = EpisodeStats(stats_keys)
+    # SyncDataCollector resets the environment during construction. Initialize
+    # curricula first so the first episode does not receive full disturbances.
+    if hasattr(base_env, "set_training_progress"):
+        base_env.set_training_progress(0)
     collector = SyncDataCollector(
         env,
         policy=policy,
@@ -341,16 +386,23 @@ def main(cfg):
         seed: int=0,
         exploration_type: ExplorationType=ExplorationType.MODE,
         command_vx: float=None,
+        command_yaw_rate: float=None,
         prefix: str="eval/stats",
+        disturbances: bool=False,
     ):
 
         old_eval_command_vx = float(base_env.eval_command_vx)
+        old_eval_command_yaw_rate = float(base_env.eval_command_yaw_rate)
         if command_vx is not None:
             base_env.eval_command_vx = float(command_vx)
+        if command_yaw_rate is not None:
+            base_env.eval_command_yaw_rate = float(command_yaw_rate)
         base_env.enable_render(not cfg.headless)
         base_env.eval()
         env.eval()
         env.set_seed(seed)
+        old_disturbances_in_eval = bool(base_env.disturbances_in_eval)
+        base_env.disturbances_in_eval = bool(disturbances)
 
         render_callback = None if cfg.headless else RenderCallback(interval=2)
 
@@ -400,20 +452,58 @@ def main(cfg):
         # info["eval/episode_len"] = wandb.plot.histogram(table, "episode_len")
 
         base_env.eval_command_vx = old_eval_command_vx
+        base_env.eval_command_yaw_rate = old_eval_command_yaw_rate
+        base_env.disturbances_in_eval = old_disturbances_in_eval
         return info
 
     def evaluate_commands():
-        info = evaluate(command_vx=float(cfg.task.eval_command_vx), prefix="eval/stats")
+        info = {}
+        if bool(cfg.task.get("eval_nominal", True)):
+            info.update(
+                evaluate(command_vx=float(cfg.task.eval_command_vx), prefix="eval/stats")
+            )
         move_vx = abs(float(cfg.task.get("eval_move_command_vx", 0.0)))
+        if hasattr(base_env, "_current_lin_vel_range"):
+            current_vx_range = base_env._current_lin_vel_range()
+            move_vx = min(
+                move_vx,
+                max(abs(float(current_vx_range[0])), abs(float(current_vx_range[1]))),
+            )
         if move_vx > 0.0:
-            info.update(evaluate(seed=1, command_vx=-move_vx, prefix="eval/forward/stats"))
-            info.update(evaluate(seed=2, command_vx=move_vx, prefix="eval/backward/stats"))
+            info.update(evaluate(seed=1, command_vx=move_vx, prefix="eval/forward/stats"))
+            info.update(evaluate(seed=2, command_vx=-move_vx, prefix="eval/backward/stats"))
+        turn_rate = abs(float(cfg.task.get("eval_turn_command_yaw_rate", 0.0)))
+        if hasattr(base_env, "_current_max_yaw_rate"):
+            turn_rate = min(turn_rate, abs(float(base_env._current_max_yaw_rate())))
+        if turn_rate > 0.0:
+            info.update(evaluate(
+                seed=4,
+                command_vx=0.0,
+                command_yaw_rate=turn_rate,
+                prefix="eval/turn_left/stats",
+            ))
+            info.update(evaluate(
+                seed=5,
+                command_vx=0.0,
+                command_yaw_rate=-turn_rate,
+                prefix="eval/turn_right/stats",
+            ))
+        if bool(cfg.task.get("eval_disturbances", False)):
+            info.update(
+                evaluate(
+                    seed=3,
+                    command_vx=0.0,
+                    prefix="eval/robust/stats",
+                    disturbances=True,
+                )
+            )
         return info
 
     env.train()
     if hasattr(base_env, "set_training_progress"):
         base_env.set_training_progress(0)
     start_time = time.time()
+    last_eval_frames = -1
     for i, data in enumerate(collector):
         if hasattr(base_env, "set_training_progress"):
             base_env.set_training_progress(collector._frames)
@@ -425,6 +515,28 @@ def main(cfg):
             "train_iter": i + 1,
         }
         info["reward"] = _mean_tensor(data[("next", "agents", "reward")])
+        if hasattr(base_env, "_current_wheel_residual_scale"):
+            info["state.wheel_residual_scale"] = float(
+                base_env._current_wheel_residual_scale
+            )
+        if hasattr(base_env, "_current_leg_policy_scale"):
+            info["state.leg_policy_scale"] = float(base_env._current_leg_policy_scale)
+        if hasattr(base_env, "_current_disturbance_scale"):
+            info["state.disturbance_scale"] = float(
+                base_env._current_disturbance_scale
+            )
+        if hasattr(base_env, "_current_translation_position_hold_scale"):
+            info["state.translation_position_hold_scale"] = float(
+                base_env._current_translation_position_hold_scale
+            )
+        if hasattr(base_env, "_current_lin_vel_range"):
+            command_vx_range = base_env._current_lin_vel_range()
+            info["state.command_vx_min"] = float(command_vx_range[0])
+            info["state.command_vx_max"] = float(command_vx_range[1])
+        if hasattr(base_env, "_current_max_yaw_rate"):
+            info["state.command_yaw_rate_max"] = float(
+                base_env._current_max_yaw_rate()
+            )
         info.update({f"state.{k}": v for k, v in _current_state_from_obs(data[("next", "agents", "observation")])})
         episode_stats.add(data.to_tensordict())
 
@@ -438,12 +550,6 @@ def main(cfg):
         update_info = policy.train_op(data.to_tensordict())
         info.update(update_info)
 
-        if eval_interval > 0 and (i + 1) % eval_interval == 0:
-            logging.info(f"Eval at {collector._frames} steps.")
-            info.update(evaluate_commands())
-            env.train()
-            base_env.train()
-
         if save_interval > 0 and (i + 1) % save_interval == 0:
             try:
                 ckpt_path = _checkpoint_path(cfg, f"checkpoint_{collector._frames}.pt")
@@ -451,6 +557,13 @@ def main(cfg):
                 logging.info(f"Saved checkpoint to {str(ckpt_path)}")
             except AttributeError:
                 logging.warning(f"Policy {policy} does not implement `.state_dict()`")
+
+        if eval_interval > 0 and (i + 1) % eval_interval == 0:
+            logging.info(f"Eval at {collector._frames} steps.")
+            info.update(evaluate_commands())
+            last_eval_frames = collector._frames
+            env.train()
+            base_env.train()
 
         run.log(info)
         state_items = [
@@ -462,22 +575,18 @@ def main(cfg):
         state_items.extend(_select_fields(info, [
             "state.roll",
             "state.pitch",
-            "state.yaw",
             "state.height",
-            "state.vx",
             "state.vy",
-            "state.vz",
-            "state.roll_rate",
-            "state.pitch_rate",
             "state.yaw_rate",
             "state.command_vx",
-            "state.command_yaw_rate",
+            "state.command_abs_vx",
+            "state.command_vx_min",
+            "state.command_vx_max",
+            "state.wheel_residual_scale",
+            "state.leg_policy_scale",
         ]))
+        state_items.extend(_select_fields(info, TRACKED_STATE_STATS_KEYS))
         _print_block("state", state_items)
-
-        train_items = _select_fields(info, TRACKED_TRAIN_KEYS)
-        if train_items:
-            _print_block("train", train_items)
 
         update_items = _select_fields(info, TRACKED_UPDATE_KEYS)
         if update_items:
@@ -495,16 +604,29 @@ def main(cfg):
         if eval_backward_items:
             _print_block("eval_backward", eval_backward_items)
 
+        eval_robust_items = _select_fields(info, TRACKED_EVAL_ROBUST_KEYS)
+        if eval_robust_items:
+            _print_block("eval_robust", eval_robust_items)
+
+        eval_turn_items = _select_fields(info, TRACKED_EVAL_TURN_KEYS)
+        if eval_turn_items:
+            _print_block("eval_turn", eval_turn_items)
+
         if max_iters > 0 and i >= max_iters - 1:
             break
 
-    info = {"env_frames": collector._frames}
-    if eval_interval > 0:
+    final_info = {"env_frames": collector._frames}
+    if eval_interval > 0 and last_eval_frames != collector._frames:
         logging.info(f"Final Eval at {collector._frames} steps.")
-        info.update(evaluate_commands())
+        final_info.update(evaluate_commands())
+    elif last_eval_frames == collector._frames:
+        final_info.update({k: v for k, v in info.items() if k.startswith("eval/")})
+    info = final_info
     run.log(info)
     final_items = [("env_frames", info["env_frames"])]
     final_items.extend(_select_fields(info, TRACKED_EVAL_KEYS))
+    final_items.extend(_select_fields(info, TRACKED_EVAL_ROBUST_KEYS))
+    final_items.extend(_select_fields(info, TRACKED_EVAL_TURN_KEYS))
     _print_block("final", final_items)
 
     try:

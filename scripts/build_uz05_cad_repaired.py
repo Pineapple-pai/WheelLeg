@@ -20,7 +20,9 @@ DEFAULT_USD = ASSET / "usd/twowheel_uz05.cad_repaired.usda"
 DEFAULT_URDF = ASSET / "urdf/twowheel_uz05.cad_repaired.urdf"
 
 WHEELS = {"Lwhl", "Rwhl"}
-CONTROLLED_LEGS = {"L12", "L45", "R12", "R45"}
+ACTIVE_LEG_INPUTS = {"LL", "Lcrank", "RL", "Rcrank"}
+PASSIVE_LINKAGE_JOINTS = {"L12", "L234", "Lcal", "L45", "R12", "R234", "Rcal", "R45"}
+CONTINUOUS_JOINTS = WHEELS | ACTIVE_LEG_INPUTS | PASSIVE_LINKAGE_JOINTS
 PAIR_NAMES = (
     ("LL", "RL"),
     ("L234", "R234"),
@@ -41,6 +43,18 @@ CLOSURE_JOINTS = {
         "body0": "/twowheel_uz05/R12",
         "body1": "/twowheel_uz05/R234",
         "world_point": (0.19275, -0.0000005, 0.0586415),
+    },
+    "left_lower_leg_closure": {
+        "body0": "/twowheel_uz05/L45",
+        "body1": "/twowheel_uz05/L234",
+        # Independently fitted from the coaxial 5 mm and 4 mm holes in both
+        # link meshes. Any X position on this transverse axis is equivalent.
+        "world_point": (-0.1855, -0.13716242, 0.16906952),
+    },
+    "right_lower_leg_closure": {
+        "body0": "/twowheel_uz05/R45",
+        "body1": "/twowheel_uz05/R234",
+        "world_point": (0.1855, -0.13716242, 0.16906952),
     },
 }
 
@@ -86,8 +100,11 @@ def _repair_usd(base: Path, rcrank_source: Path, output: Path) -> Usd.Stage:
         "physics:localRot1",
     ):
         _copy_attribute(source_joint, target_joint, name)
-    target_joint.CreateAttribute("physics:lowerLimit", Sdf.ValueTypeNames.Float).Set(-90.0)
-    target_joint.CreateAttribute("physics:upperLimit", Sdf.ValueTypeNames.Float).Set(90.0)
+    # PhysX expects explicit infinities for an unlimited revolute joint. A USD
+    # value block composes as None but is interpreted as a zero-width limit by
+    # the runtime in Isaac Sim 4.0.
+    target_joint.CreateAttribute("physics:lowerLimit", Sdf.ValueTypeNames.Float).Set(float("-inf"))
+    target_joint.CreateAttribute("physics:upperLimit", Sdf.ValueTypeNames.Float).Set(float("inf"))
 
     repair_notes = {
         "uz05:cadSource": r"D:\WheelLeg\UZ-05-open总装.SLDASM",
@@ -95,7 +112,7 @@ def _repair_usd(base: Path, rcrank_source: Path, output: Path) -> Usd.Stage:
         "uz05:cadFullAssemblyMassKg": 18.68716973046,
         "uz05:cadChassisMassKg": 15.6823443830009,
         "uz05:cadLegMassKg": 0.994478771084523,
-        "uz05:cadClosureStatus": "repaired_redundant_mates_259_260_removed",
+        "uz05:cadClosureStatus": "repaired_four_loop_axes_from_cad_meshes",
         "uz05:urdfTopology": "open_tree_for_visualization_and_static_regression",
     }
     root = stage.OverridePrim("/twowheel_uz05")
@@ -125,31 +142,53 @@ def _repair_usd(base: Path, rcrank_source: Path, output: Path) -> Usd.Stage:
         joint.CreateAxisAttr("Z")
         joint.CreateExcludeFromArticulationAttr(True)
         joint.CreateCollisionEnabledAttr(False)
+        joint.GetPrim().SetMetadata(
+            "apiSchemas",
+            Sdf.TokenListOp.Create(prependedItems=["PhysxJointAPI"]),
+        )
+        joint.GetPrim().CreateAttribute(
+            "physxJoint:enableProjection", Sdf.ValueTypeNames.Bool, custom=False
+        ).Set(True)
         world_point = Gf.Vec3d(*closure["world_point"])
         for index, body_path in enumerate((body0_path, body1_path)):
             body = stage.GetPrimAtPath(body_path)
             body_world = xforms.GetLocalToWorldTransform(body)
             local_point = body_world.GetInverse().Transform(world_point)
             body_world_rotation = body_world.ExtractRotation()
-            local_rotation = body_world_rotation.GetInverse() * desired_world_rotation
+            # USD joint frames compose as local * body under Gf's row-vector
+            # convention. Solve local * body = desired world frame.
+            local_rotation = desired_world_rotation * body_world_rotation.GetInverse()
             getattr(joint, f"CreateLocalPos{index}Attr")(Gf.Vec3f(local_point))
             getattr(joint, f"CreateLocalRot{index}Attr")(Gf.Quatf(local_rotation.GetQuat()))
 
     for prim in stage.Traverse():
         if not prim.IsA(UsdPhysics.RevoluteJoint):
             continue
+        if prim.GetParent().GetPath() == Sdf.Path("/twowheel_uz05/loop_joints"):
+            # Loop closures are passive constraints. A drive or arbitrary
+            # angle limits here over-constrain the linkage and inject energy.
+            continue
         name = prim.GetName()
-        if name not in WHEELS:
+        if name in CONTINUOUS_JOINTS:
+            prim.CreateAttribute("physics:lowerLimit", Sdf.ValueTypeNames.Float).Set(float("-inf"))
+            prim.CreateAttribute("physics:upperLimit", Sdf.ValueTypeNames.Float).Set(float("inf"))
+        else:
             # USD angular limits are authored in degrees. The previous +/-1.57
             # values constrained these joints to +/-1.57 degrees, not radians.
             prim.CreateAttribute("physics:lowerLimit", Sdf.ValueTypeNames.Float).Set(-90.0)
             prim.CreateAttribute("physics:upperLimit", Sdf.ValueTypeNames.Float).Set(90.0)
 
+        if name in PASSIVE_LINKAGE_JOINTS:
+            # These coordinates are solved by the two closed loops on each
+            # side. Any drive here would add an actuator that does not exist.
+            prim.RemoveAPI(UsdPhysics.DriveAPI, "angular")
+            continue
+
         drive = UsdPhysics.DriveAPI.Apply(prim, "angular")
         if name in WHEELS:
-            stiffness, damping, max_force = 0.0, 4.0, 12.0
-        elif name in CONTROLLED_LEGS:
-            stiffness, damping, max_force = 120.0, 12.0, 60.0
+            stiffness, damping, max_force = 0.0, 4.0, 2.46
+        elif name in ACTIVE_LEG_INPUTS:
+            stiffness, damping, max_force = 120.0, 12.0, 20.0
         else:
             stiffness, damping, max_force = 500.0, 20.0, 80.0
         drive.CreateStiffnessAttr(stiffness)
@@ -262,7 +301,7 @@ def _write_urdf(stage: Usd.Stage, output: Path) -> None:
         name = prim.GetName()
         if prim.IsA(UsdPhysics.FixedJoint):
             joint_type = "fixed"
-        elif name in WHEELS:
+        elif name in CONTINUOUS_JOINTS:
             joint_type = "continuous"
         else:
             joint_type = "revolute"
@@ -285,13 +324,30 @@ def _write_urdf(stage: Usd.Stage, output: Path) -> None:
             axis_in_child = Gf.Rotation(Gf.Quatd(local_rot1)).GetInverse().TransformDir(axis)
             ET.SubElement(joint, "axis", xyz=_format_vector(axis_in_child))
             if joint_type == "continuous":
-                ET.SubElement(joint, "limit", effort="12", velocity="20")
-                ET.SubElement(joint, "dynamics", damping="4", friction="0")
+                if name in WHEELS:
+                    effort, velocity, damping = 2.46, 20.0, 4.0
+                elif name in ACTIVE_LEG_INPUTS:
+                    effort, velocity, damping = 20.0, 4.0, 12.0
+                else:
+                    # Passive closed-loop coordinates have no actuator. The
+                    # URDF remains an open-tree static/interchange artifact.
+                    effort, velocity, damping = 0.0, 20.0, 0.0
+                ET.SubElement(
+                    joint,
+                    "limit",
+                    effort=f"{effort:.12g}",
+                    velocity=f"{velocity:.12g}",
+                )
+                ET.SubElement(joint, "dynamics", damping=f"{damping:.12g}", friction="0")
             else:
                 lower_degrees = float(prim.GetAttribute("physics:lowerLimit").Get())
                 upper_degrees = float(prim.GetAttribute("physics:upperLimit").Get())
-                max_force = 60.0 if name in CONTROLLED_LEGS else 80.0
-                damping = 12.0 if name in CONTROLLED_LEGS else 20.0
+                if name in PASSIVE_LINKAGE_JOINTS:
+                    max_force, damping = 0.0, 0.0
+                elif name in ACTIVE_LEG_INPUTS:
+                    max_force, damping = 20.0, 12.0
+                else:
+                    max_force, damping = 80.0, 20.0
                 ET.SubElement(
                     joint,
                     "limit",
@@ -315,11 +371,38 @@ def _write_urdf(stage: Usd.Stage, output: Path) -> None:
 
 def _validate(stage: Usd.Stage, urdf: Path) -> None:
     joints = _joint_prims(stage)
+    loop_joints = [
+        prim
+        for prim in joints
+        if prim.GetAttribute("physics:excludeFromArticulation").Get()
+    ]
+    if len(loop_joints) != len(CLOSURE_JOINTS):
+        raise RuntimeError(
+            f"Expected {len(CLOSURE_JOINTS)} loop joints, found {len(loop_joints)}"
+        )
     rcrank = stage.GetPrimAtPath("/twowheel_uz05/base_link/Rcrank")
     if not rcrank.IsA(UsdPhysics.RevoluteJoint):
         raise RuntimeError("Rcrank was not repaired as a revolute joint")
     for prim in joints:
         if not prim.IsA(UsdPhysics.RevoluteJoint):
+            continue
+        if prim.GetAttribute("physics:excludeFromArticulation").Get():
+            if prim.HasAPI(UsdPhysics.DriveAPI, "angular"):
+                raise RuntimeError(f"Loop closure must not have a drive: {prim.GetPath()}")
+            continue
+        name = prim.GetName()
+        lower = prim.GetAttribute("physics:lowerLimit").Get()
+        upper = prim.GetAttribute("physics:upperLimit").Get()
+        if name in CONTINUOUS_JOINTS:
+            if lower != float("-inf") or upper != float("inf"):
+                raise RuntimeError(f"Continuous joint has a finite effective limit: {prim.GetPath()}")
+        elif lower is None or upper is None:
+            raise RuntimeError(f"Revolute joint is missing a finite limit: {prim.GetPath()}")
+        elif not math.isfinite(float(lower)) or not math.isfinite(float(upper)):
+            raise RuntimeError(f"Revolute joint has a non-finite limit: {prim.GetPath()}")
+        if name in PASSIVE_LINKAGE_JOINTS:
+            if prim.HasAPI(UsdPhysics.DriveAPI, "angular"):
+                raise RuntimeError(f"Passive linkage joint has a drive: {prim.GetPath()}")
             continue
         drive = UsdPhysics.DriveAPI.Get(prim, "angular")
         max_force = drive.GetMaxForceAttr().Get()
@@ -341,7 +424,7 @@ def _validate(stage: Usd.Stage, urdf: Path) -> None:
             local_point = joint.GetAttribute(f"physics:localPos{index}").Get()
             local_rotation = Gf.Rotation(Gf.Quatd(joint.GetAttribute(f"physics:localRot{index}").Get()))
             points.append(body_world.Transform(local_point))
-            axes.append((body_world.ExtractRotation() * local_rotation).TransformDir(Gf.Vec3d(0, 0, 1)))
+            axes.append((local_rotation * body_world.ExtractRotation()).TransformDir(Gf.Vec3d(0, 0, 1)))
         if (points[0] - points[1]).GetLength() >= 0.0005:
             raise RuntimeError(f"Closure position residual exceeds 0.5 mm: {name}")
         if abs(axes[0].GetNormalized() * axes[1].GetNormalized()) < 0.999999:
@@ -429,7 +512,10 @@ def main() -> int:
     _validate(stage, args.output_urdf.resolve())
     print(f"USD: {args.output_usd.resolve()}")
     print(f"URDF: {args.output_urdf.resolve()}")
-    print("Validated: 19 links, 18 tree joints, 2 loop joints, Rcrank revolute, finite drives, wheel material, zero-pose FK")
+    print(
+        f"Validated: 19 links, 18 tree joints, {len(CLOSURE_JOINTS)} loop joints, "
+        "Rcrank revolute, finite drives, wheel material, zero-pose FK"
+    )
     return 0
 
 

@@ -1,0 +1,27 @@
+defaults:
+  - TwoWheelClosedLoopV2
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V2 learned to survive at about 0.052 m with a persistent roll instead of
+# recovering the requested 0.083 m wheel-supported stance. Remove rewards that
+# favor the zero joint pose and provide a dense gradient toward standing height.
+reward_leg_neutral_weight: 0.0
+reward_settle_weight: 0.0
+reward_height_recovery_weight: 8.0
+reward_base_height_weight: 4.0
+penalty_height_deficit_weight: 20.0
+penalty_low_height_weight: 20.0
+# Smooth milestones keep a non-zero gradient around each successive stance
+# band. Uprightness gates them so a tipped chassis cannot earn height alone.
+reward_height_stage_weight: 6.0
+height_stage_thresholds: [0.050, 0.060, 0.070, 0.078]
+height_stage_width: 0.004
+reward_orientation_weight: -12.0
+
+# Keep this version strictly zero-command. Translation starts only after the
+# physical stance passes the acceptance thresholds documented in README.md.
+train_stage: stand
+lin_vel_range: [0.0, 0.0]
+command_zero_prob: 1.0

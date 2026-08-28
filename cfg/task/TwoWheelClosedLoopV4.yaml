@@ -1,0 +1,79 @@
+defaults:
+  - TwoWheelClosedLoopV3
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# Dynamic closed-loop acceptance requires a 2 ms PhysX step. Eight substeps
+# retain the existing 16 ms policy/control period.
+sim:
+  dt: 0.002
+  substeps: 8
+
+reset_height: 0.08917
+min_height: 0.075
+height_floor: 0.080
+base_height_target: 0.0865
+# Stage-1 evaluation must measure standing only. Translation is enabled by the
+# move-stage config after a standing checkpoint passes acceptance.
+eval_move_command_vx: 0.0
+eval_disturbances: true
+
+# Stage-1 robustness curriculum. Disturbances are velocity impulses, which are
+# independent of robot mass and avoid inventing an uncalibrated external force.
+max_init_roll: 0.02
+max_init_pitch: 0.005
+reset_forward_velocity: 0.03
+reset_balance_rate: 0.05
+push_interval: 6.0
+kick_velocity_min: 0.01
+kick_velocity_max: 0.04
+kick_balance_rate_min: 0.02
+kick_balance_rate_max: 0.08
+push_warmup_steps: 100
+
+# Deployable residual architecture: the same normalized wheel-torque feedback
+# must run on hardware before adding the policy residual. The gains below passed
+# the 1000-step mechanical acceptance test without torque saturation.
+wheel_balance_baseline_enabled: true
+wheel_balance_roll_kp: 16.0
+wheel_balance_roll_kd: 1.75
+wheel_balance_velocity_kd: 0.25
+wheel_balance_position_kp: -0.01
+wheel_balance_yaw_kp: -0.2
+wheel_balance_yaw_kd: 0.0
+wheel_residual_scale: 0.02
+penalty_zero_command_velocity_weight: 20.0
+penalty_policy_wheel_residual_weight: 50.0
+
+# The balanced action-height scan shows that the zero active-joint pose already
+# gives the nominal 0.0865 m stance. During stage 1, keep all four active joints
+# near that deployable pose instead of rewarding unreachable height recovery.
+reward_height_recovery_weight: 0.0
+penalty_height_deficit_weight: 8.0
+reward_height_stage_weight: 0.0
+reward_leg_neutral_weight: 2.0
+penalty_leg_pos_weight: 0.5
+penalty_leg_vel_weight: 0.2
+penalty_leg_action_weight: 0.1
+penalty_leg_action_diff_weight: 0.2
+
+robot:
+  articulation_props:
+    enable_self_collisions: false
+    solver_position_iteration_count: 32
+    solver_velocity_iteration_count: 8
+  # Direct current/torque actions map linearly to the rated wheel output torque.
+  action_smoothing: 1.0
+  action_rate_limit: 0.0
+  action_accel_limit: 0.0
+  wheel_effort_actions: true
+  wheel_effort_limit: 2.46
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 0.0
+  wheel_drive_max_force: 2.46
+  wheel_drive_max_velocity: 20.0
+  # Minimum friction that passed the unlimited-passive-joint 1000-step test.
+  # This remains a calibration parameter and must be measured/randomized before
+  # hardware deployment.
+  passive_joint_friction: 0.20

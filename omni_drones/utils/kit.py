@@ -8,7 +8,6 @@ import math
 from typing import Optional, Sequence
 
 import carb
-import omni.isaac.core.utils.nucleus as nucleus_utils
 import omni.isaac.core.utils.prims as prim_utils
 import omni.kit
 from omni.isaac.core.materials import PhysicsMaterial
@@ -41,29 +40,37 @@ def create_ground_plane(
             Defaults to (0.065, 0.0725, 0.080).
 
     Keyword Args:
-        usd_path: The USD path to the ground plane. Defaults to the asset path
-            `Isaac/Environments/Grid/default_environment.usd` on the Isaac Sim Nucleus server.
+        usd_path: Optional USD path to a ground-plane asset. When omitted, a
+            local Plane prim is created so training does not depend on remote assets.
         improve_patch_friction: Whether to enable patch friction. Defaults to False.
         combine_mode: Determines the way physics materials will be combined during collisions.
             Available options are `average`, `min`, `multiply`, `multiply`, and `max`. Defaults to `average`.
         light_intensity: The power intensity of the light source. Defaults to 1e7.
         light_radius: The radius of the light source. Defaults to 50.0.
     """
-    # Retrieve path to the plane
-    if "usd_path" in kwargs:
-        usd_path = kwargs["usd_path"]
-    else:
-        # get path to the nucleus server
-        # assets_root_path = nucleus_utils.get_assets_root_path()
-        assets_root_path = "http://omniverse-content-production.s3-us-west-2.amazonaws.com/Assets/Isaac/4.1"
-        print("Assets root path: ", assets_root_path)
-        if assets_root_path is None:
-            carb.log_error("Unable to access the Isaac Sim assets folder on Nucleus server.")
-            return
-        # prepend path to the grid plane
-        usd_path = f"{assets_root_path}/Isaac/Environments/Grid/default_environment.usd"
-    # Spawn Ground-plane
-    prim_utils.create_prim(prim_path, usd_path=usd_path, translation=(0.0, 0.0, z_position))
+    usd_path = kwargs.get("usd_path")
+    collision_prim = None
+    if usd_path:
+        prim_utils.create_prim(prim_path, usd_path=usd_path, translation=(0.0, 0.0, z_position))
+        collision_prim = prim_utils.get_first_matching_child_prim(
+            prim_path, predicate=lambda x: prim_utils.get_prim_type_name(x) == "Plane"
+        )
+    if collision_prim is None:
+        if usd_path:
+            carb.log_warn(
+                f"Ground plane asset did not provide a Plane prim from {usd_path}; "
+                "creating a local fallback Plane."
+            )
+        if not prim_utils.is_prim_path_valid(prim_path):
+            prim_utils.create_prim(prim_path, translation=(0.0, 0.0, z_position))
+        fallback_prim_path = f"{prim_path}/GroundPlane"
+        prim_utils.create_prim(
+            fallback_prim_path,
+            prim_type="Plane",
+            translation=(0.0, 0.0, z_position),
+            scale=(1000.0, 1000.0, 1.0),
+        )
+        collision_prim = prim_utils.get_prim_at_path(fallback_prim_path)
     # Create physics material
     material = PhysicsMaterial(
         f"{prim_path}/groundMaterial",
@@ -81,16 +88,12 @@ def create_ground_plane(
     physx_material_api.CreateFrictionCombineModeAttr().Set(combine_mode)
     physx_material_api.CreateRestitutionCombineModeAttr().Set(combine_mode)
     # Apply physics material to ground plane
-    collision_prim_path = prim_utils.get_prim_path(
-        prim_utils.get_first_matching_child_prim(
-            prim_path, predicate=lambda x: prim_utils.get_prim_type_name(x) == "Plane"
-        )
-    )
+    collision_prim_path = prim_utils.get_prim_path(collision_prim)
     geom_prim = GeometryPrim(collision_prim_path, disable_stablization=False, collision=True)
     geom_prim.apply_physics_material(material)
     # Change the color of the plane
     # Warning: This is specific to the default grid plane asset.
-    if color is not None:
+    if color is not None and prim_utils.is_prim_path_valid(f"{prim_path}/Looks/theGrid"):
         omni.kit.commands.execute(
             "ChangeProperty",
             prop_path=f"{prim_path}/Looks/theGrid.inputs:diffuse_tint",

@@ -1,0 +1,63 @@
+defaults:
+  - TwoWheelClosedLoopV17
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v18
+
+# V17 learned motion, but the wheel baseline over-drove the body into large roll
+# and the policy accepted wrong-direction travel. V18 keeps the explicit forward
+# wheel baseline, but limits it so velocity tracking cannot destroy posture.
+lin_vel_curriculum_start: [-0.04, 0.04]
+lin_vel_curriculum_end: [-0.22, 0.22]
+lin_vel_range: [-0.22, 0.22]
+command_min_move_speed: 0.04
+command_active_vx: 0.025
+command_zero_prob: 0.03
+
+reward_stand_weight: 36.0
+reward_upright_weight: 40.0
+reward_height_weight: 44.0
+reward_settle_weight: 6.0
+penalty_roll_weight: 380.0
+penalty_roll_rate_weight: 14.0
+
+reward_tracking_lin_vel_weight: 30.0
+reward_tracking_lin_vel_soft_weight: 12.0
+tracking_soft_sigma: 0.16
+reward_velocity_weight: 12.0
+reward_normalized_lin_vel_weight: 44.0
+penalty_active_velocity_error_weight: 8.0
+penalty_lin_vel_tracking_square_weight: 4.0
+reward_forward_progress_weight: 3.0
+reward_displacement_progress_weight: 1.5
+
+reward_wheel_command_tracking_weight: 12.0
+wheel_command_tracking_sigma: 0.055
+reward_command_action_alignment_weight: 6.0
+
+penalty_translation_wheel_diff_weight: 48.0
+penalty_translation_action_diff_weight: 10.0
+penalty_yaw_rate_drift_weight: 18.0
+penalty_wheel_vel_diff_weight: 16.0
+penalty_policy_wheel_residual_weight: 0.02
+
+wheel_balance_baseline_enabled: true
+wheel_balance_track_velocity_command: true
+wheel_balance_roll_kp: 7.0
+wheel_balance_roll_kd: 1.2
+wheel_balance_velocity_kd: 0.04
+wheel_balance_velocity_feedback_sign: -1.0
+wheel_balance_baseline_limit: 0.45
+wheel_balance_feedforward_limit: 0.16
+wheel_balance_yaw_limit: 0.08
+wheel_command_feedforward_gain: 0.9
+wheel_residual_curriculum_end_frame: 49152000
+wheel_residual_scale_start: 0.05
+wheel_residual_scale_end: 0.25
+
+robot:
+  action_smoothing: 0.46
+  action_rate_limit: 0.34
+  action_accel_limit: 0.22
+  leg_action_rate_limit: 0.008

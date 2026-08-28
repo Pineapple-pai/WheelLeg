@@ -83,6 +83,38 @@ class DebugDraw:
         colors = [color] * len(point_list_0)
         self._draw.draw_lines(point_list_0, point_list_1, colors, sizes)
 
+    def grid(
+        self,
+        size: float = 8.0,
+        step: float = 0.5,
+        z: float = 0.0,
+        color=(0.20, 0.22, 0.24, 1.0),
+        major_color=(0.32, 0.34, 0.38, 1.0),
+        major_every: int = 5,
+    ):
+        if self._draw is None:
+            return
+        half = float(size) * 0.5
+        xs = torch.arange(-half, half + 1e-6, step)
+        ys = torch.arange(-half, half + 1e-6, step)
+        point_list_0 = []
+        point_list_1 = []
+        colors = []
+        sizes = []
+        for i, x in enumerate(xs.tolist()):
+            line_color = major_color if major_every > 0 and i % major_every == 0 else color
+            point_list_0.append((x, -half, z))
+            point_list_1.append((x, half, z))
+            colors.append(line_color)
+            sizes.append(1.0)
+        for i, y in enumerate(ys.tolist()):
+            line_color = major_color if major_every > 0 and i % major_every == 0 else color
+            point_list_0.append((-half, y, z))
+            point_list_1.append((half, y, z))
+            colors.append(line_color)
+            sizes.append(1.0)
+        self._draw.draw_lines(point_list_0, point_list_1, colors, sizes)
+
 
 class IsaacEnv(EnvBase):
 

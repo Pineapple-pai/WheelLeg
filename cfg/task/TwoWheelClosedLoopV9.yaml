@@ -1,0 +1,13 @@
+defaults:
+  - TwoWheelClosedLoopV8
+  - _self_
+
+name: TwoWheelClosedLoop
+train_stage: joint_locomotion_dense_v9
+
+# Fix the forward-axis convention. The current policy/metric pairing treats
+# positive command_vx as the opposite physical direction, which is why forward
+# replay is barely visible while backward is slower but obvious.
+forward_axis_sign: -1.0
+
+# Keep the rest of V8 intact.
