@@ -1,0 +1,55 @@
+defaults:
+  - TwoWheelClosedLoopV39
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V39 proved the repaired CAD USD loads and has the correct forward polarity,
+# but scratch training was too aggressive: by iter 500 roll_error was ~0.30,
+# stand_reward ~0.07 and the balance baseline saturated. V40 first rebuilds a
+# stable repaired-USD posture skill, then lets translation grow.
+
+# Make early curriculum genuinely low speed. The repaired closed-loop dynamics
+# are different enough from the old USD that the policy needs a posture phase.
+lin_vel_curriculum_start: [-0.03, 0.03]
+lin_vel_curriculum_end: [-0.60, 0.60]
+command_curriculum_start_frame: 6000000
+command_curriculum_end_frame: 45000000
+command_zero_prob: 0.35
+command_min_move_speed: 0.03
+
+# Keep active motion, but lower the early speed temptation until stand_reward
+# is no longer collapsed.
+tracking_lin_vel_multiplier_start: 0.20
+tracking_lin_vel_multiplier_end: 0.85
+reward_normalized_lin_vel_weight: 1.8
+reward_wheel_command_tracking_weight: 5.0
+reward_command_action_alignment_weight: 2.0
+penalty_active_velocity_error_weight: 0.12
+
+# V39 hit the baseline clamp constantly. Reduce commanded lean/feedforward and
+# give the policy a softer residual range while the repaired linkage settles.
+command_balance_gain: 0.055
+command_balance_limit: 0.08
+wheel_balance_feedforward_limit: 0.07
+wheel_residual_scale_start: 0.05
+wheel_residual_scale_end: 0.14
+wheel_residual_curriculum_end_frame: 30000000
+
+# The repaired linkage has real constraints; avoid driving the legs too far
+# before it learns the new neutral geometry.
+leg_policy_scale_start: 0.12
+leg_policy_scale_end: 0.45
+leg_policy_curriculum_end_frame: 30000000
+penalty_leg_action_weight: 0.10
+penalty_leg_action_diff_weight: 3.0
+penalty_leg_vel_weight: 0.28
+
+# Stronger early posture survival, but keep trend penalty light so it does not
+# prohibit all commanded lean.
+posture_trend_weight: 0.2
+penalty_roll_weight: 190.0
+penalty_roll_rate_weight: 42.0
+reward_posture_recovery_weight: 5.0
+reward_leg_support_weight: 5.0
+penalty_posture_worsening_weight: 3.0

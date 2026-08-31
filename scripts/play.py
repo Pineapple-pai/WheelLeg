@@ -85,12 +85,12 @@ class KeyboardCommandCallback:
             lambda event, *args, obj=weakref.proxy(self): obj._on_keyboard_event(event, *args),
         )
         print(
-            f"Keyboard control enabled: W/UP/NUMPAD_8 forward({-self.forward_speed:.3f}), "
-            f"S/DOWN/NUMPAD_2 backward({self.forward_speed:.3f}), release to stop."
+            f"Keyboard control enabled: W/UP/NUMPAD_8 forward({self.forward_speed:.3f}), "
+            f"S/DOWN/NUMPAD_2 backward({-self.forward_speed:.3f}), release to stop."
         )
         if self.command_file:
             print(
-                f"Command-file fallback enabled: echo -{self.forward_speed:.3f} > {self.command_file} "
+                f"Command-file fallback enabled: echo {self.forward_speed:.3f} > {self.command_file} "
                 f"for forward, echo 0 > {self.command_file} to stop."
             )
 
@@ -110,9 +110,9 @@ class KeyboardCommandCallback:
         key = event.input.name if hasattr(event.input, "name") else str(event.input)
         if event.type == self.carb.input.KeyboardEventType.KEY_PRESS:
             if key in ("W", "UP", "NUMPAD_8"):
-                self.target_vx = -self.forward_speed
-            elif key in ("S", "DOWN", "NUMPAD_2"):
                 self.target_vx = self.forward_speed
+            elif key in ("S", "DOWN", "NUMPAD_2"):
+                self.target_vx = -self.forward_speed
         elif event.type == self.carb.input.KeyboardEventType.KEY_RELEASE:
             if key in ("W", "S", "UP", "DOWN", "NUMPAD_8", "NUMPAD_2"):
                 self.target_vx = 0.0

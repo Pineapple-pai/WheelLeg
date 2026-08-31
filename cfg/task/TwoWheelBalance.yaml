@@ -13,9 +13,9 @@ robot:
   usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.all_joints.usd
   left_wheel_joint: Lwhl
   right_wheel_joint: Rwhl
-  # The exported URDF is an open CAD tree: L12/L45/R12/R45 are not in the
-  # wheel support chains. Stage 1/2 therefore train wheel control only.
-  leg_joint_names: []
+  # Four controllable leg joints. TwoWheelRobot derives num_leg_joints from
+  # this list, so the policy action/observation dimensions update automatically.
+  leg_joint_names: [L12, L45, R12, R45]
   max_wheel_velocity: 20.0
   # Measured from the exported wheel STL. Positive joint rotation about world
   # +X corresponds to negative body +Y velocity under no-slip rolling.
@@ -37,7 +37,8 @@ robot:
   max_leg_velocity: 0.45
   leg_action_smoothing: 0.14
   leg_action_rate_limit: 0.035
-  lock_leg_actions: true
+  leg_velocity_actions: false
+  lock_leg_actions: false
 
   lock_passive_joints: true
   leg_drive_stiffness: 120.0
@@ -205,6 +206,6 @@ settle_wheel_common_delta_scale: 8.8
 settle_wheel_diff_delta_scale: 2.4
 
 # No leg DOF is exposed until a closed-loop actuator mapping is available.
-stand_joint_pos: []
+stand_joint_pos: [0.0, 0.0, 0.0, 0.0]
 
 action_transform: null

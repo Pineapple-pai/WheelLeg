@@ -11,6 +11,10 @@ eval_interval: -1
 save_interval: -1
 seed: 0
 
+tensorboard:
+  enabled: false
+  log_dir: /home/p/下载/WheelLeg/tb_runs
+
 viewer:
   resolution: [960, 720]
   eye: [8, 0., 6.]

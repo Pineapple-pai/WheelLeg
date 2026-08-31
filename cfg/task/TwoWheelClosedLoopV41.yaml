@@ -1,0 +1,117 @@
+defaults:
+  - TwoWheelClosedLoopV39
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V41 is a stand/pull-up pretraining config for the repaired CAD articulation.
+# Pure physics tests showed the repaired model balances around pitch, not roll:
+# roll-axis sweeps had 0/40 pass, while pitch-axis sweeps had 24/30 static pass
+# and 8/80 nonzero-tilt pull-up pass.
+balance_axis: pitch
+
+robot:
+  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda
+  wheel_radius: 0.055
+  wheel_velocity_sign: [-1.0, -1.0]
+  wheel_effort_actions: false
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 4.0
+  wheel_drive_max_force: 12.0
+  wheel_drive_max_velocity: 20.0
+  leg_joint_names: [LL, Lcrank, RL, Rcrank]
+  leg_velocity_actions: true
+  leg_position_scale: 0.24
+  max_leg_velocity: 1.5
+  leg_action_smoothing: 0.25
+  leg_action_rate_limit: 0.04
+  lock_leg_actions: false
+  lock_passive_joints: false
+  leg_drive_stiffness: 170.0
+  leg_drive_damping: 36.0
+  leg_drive_max_force: 130.0
+  leg_drive_max_velocity: 4.0
+
+stand_joint_pos: [0.0, 0.0, 0.0, 0.0]
+reset_height: 0.0865
+base_height_target: 0.0865
+min_height: 0.060
+body_contact_height: 0.070
+
+# Stand/pull-up only. Do not train translation until this checkpoint can recover
+# from small pitch perturbations in replay.
+lin_vel_range: [0.0, 0.0]
+lin_vel_curriculum_start: [0.0, 0.0]
+lin_vel_curriculum_end: [0.0, 0.0]
+command_zero_prob: 1.0
+command_yaw_only_prob: 0.0
+command_mixed_prob: 0.0
+command_stratified_sampling: false
+max_yaw_rate: 0.0
+
+max_init_roll: 0.03
+max_init_pitch: 0.03
+reset_roll: 0.0
+reset_pitch: 0.0
+termination_roll: 0.35
+termination_pitch: 0.45
+
+# Velocity-drive wheel baseline from the pure-physics pitch pull-up sweep. The
+# parameter names still say roll for backward compatibility, but with
+# balance_axis=pitch they act on pitch and pitch_rate.
+wheel_balance_baseline_enabled: true
+wheel_balance_use_command_target: false
+wheel_balance_track_velocity_command: false
+wheel_balance_roll_kp: -2.0
+wheel_balance_roll_kd: -0.5
+wheel_balance_velocity_feedback_sign: 1.0
+wheel_balance_velocity_kd: -0.5
+wheel_balance_baseline_limit: 1.0
+wheel_balance_feedforward_limit: 0.0
+command_balance_gain: 0.0
+command_balance_limit: 0.0
+wheel_residual_scale_start: 0.05
+wheel_residual_scale_end: 0.10
+wheel_residual_curriculum_start_frame: 0
+wheel_residual_curriculum_end_frame: 20000000
+leg_policy_scale_start: 0.10
+leg_policy_scale_end: 0.35
+leg_policy_curriculum_start_frame: 0
+leg_policy_curriculum_end_frame: 25000000
+
+# Reward is intentionally posture-first. Translation terms are disabled here.
+reward_alive_weight: 0.5
+reward_stand_weight: 14.0
+reward_settle_weight: 5.0
+reward_leg_neutral_weight: 1.5
+reward_base_height_weight: 3.0
+reward_height_recovery_weight: 2.0
+penalty_height_deficit_weight: 2.0
+penalty_fall_weight: 80.0
+
+penalty_roll_weight: 35.0
+penalty_roll_rate_weight: 6.0
+penalty_pitch_weight: 180.0
+penalty_pitch_rate_weight: 40.0
+reward_orientation_weight: -8.0
+orientation_roll_cost_scale: 4.0
+orientation_pitch_cost_scale: 24.0
+
+reward_tracking_lin_vel_weight: 0.0
+reward_tracking_lin_vel_soft_weight: 0.0
+reward_tracking_lin_vel_enhance_weight: 0.0
+reward_normalized_lin_vel_weight: 0.0
+reward_wheel_command_tracking_weight: 0.0
+reward_command_action_alignment_weight: 0.0
+penalty_active_velocity_error_weight: 0.0
+penalty_lin_vel_tracking_square_weight: 0.0
+reward_forward_progress_weight: 0.0
+reward_displacement_progress_weight: 0.0
+reward_direction_weight: 0.0
+
+penalty_leg_action_weight: 0.06
+penalty_leg_action_diff_weight: 1.5
+penalty_leg_vel_weight: 0.18
+penalty_quiet_wheel_weight: 0.5
+penalty_zero_command_velocity_weight: 0.8
+posture_trend_weight: 0.0

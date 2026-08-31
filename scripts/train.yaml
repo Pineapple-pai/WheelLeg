@@ -16,6 +16,10 @@ save_interval: -1
 seed: 0
 checkpoint_version: v1
 
+tensorboard:
+  enabled: false
+  log_dir: /home/p/下载/WheelLeg/tb_runs
+
 keyboard_control: false
 teleop_speed: 0.07
 teleop_smoothing: 0.12

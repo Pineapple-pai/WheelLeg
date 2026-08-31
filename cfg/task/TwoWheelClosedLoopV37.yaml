@@ -1,0 +1,16 @@
+defaults:
+  - TwoWheelClosedLoopV36
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V36 still showed a slow chronic lean during long rollouts. V37 adds a longer
+# horizon posture trend penalty so sustained forward droop is not only judged
+# step-by-step.
+posture_trend_weight: 2.0
+posture_trend_alpha: 0.985
+
+# Slightly reduce the short-horizon posture recovery pressure so the new trend
+# term can do the long-horizon work without over-constraining the gait.
+reward_posture_recovery_weight: 5.0
+penalty_posture_worsening_weight: 3.5

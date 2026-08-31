@@ -146,6 +146,15 @@ class TwoWheelBalance(IsaacEnv):
         self.reward_lin_vel_z_weight = float(cfg.task.get("reward_lin_vel_z_weight", -1.0))
         self.reward_ang_vel_xy_weight = float(cfg.task.get("reward_ang_vel_xy_weight", -0.2))
         self.reward_orientation_weight = float(cfg.task.get("reward_orientation_weight", -30.0))
+        self.orientation_roll_cost_scale = float(
+            cfg.task.get("orientation_roll_cost_scale", 1.0)
+        )
+        self.orientation_pitch_cost_scale = float(
+            cfg.task.get("orientation_pitch_cost_scale", 1.0)
+        )
+        self.orientation_yaw_cost_scale = float(
+            cfg.task.get("orientation_yaw_cost_scale", 0.0)
+        )
         self.reward_dof_vel_weight = float(cfg.task.get("reward_dof_vel_weight", -5e-5))
         self.reward_dof_acc_weight = float(cfg.task.get("reward_dof_acc_weight", -2.5e-7))
         self.reward_torques_weight = float(cfg.task.get("reward_torques_weight", -1e-4))
@@ -198,6 +207,60 @@ class TwoWheelBalance(IsaacEnv):
         )
         self.base_height_target = float(cfg.task.get("base_height_target", 0.18))
         self.height_floor = float(cfg.task.get("height_floor", self.base_height_target - 0.01))
+        self.reward_leg_recovery_weight = float(cfg.task.get("reward_leg_recovery_weight", 0.0))
+        self.reward_posture_recovery_weight = float(
+            cfg.task.get("reward_posture_recovery_weight", 0.0)
+        )
+        self.reward_leg_support_weight = float(
+            cfg.task.get("reward_leg_support_weight", 0.0)
+        )
+        self.penalty_posture_worsening_weight = float(
+            cfg.task.get("penalty_posture_worsening_weight", 0.0)
+        )
+        self.posture_trend_weight = float(cfg.task.get("posture_trend_weight", 0.0))
+        self.posture_trend_alpha = float(cfg.task.get("posture_trend_alpha", 0.98))
+        self.recovery_progress_eps = max(
+            float(cfg.task.get("recovery_progress_eps", 0.02)),
+            1e-6,
+        )
+        self.leg_recovery_height_threshold = float(
+            cfg.task.get("leg_recovery_height_threshold", 0.08)
+        )
+        self.leg_recovery_height_width = max(
+            float(cfg.task.get("leg_recovery_height_width", 0.004)),
+            1e-6,
+        )
+        self.leg_recovery_roll_weight = float(cfg.task.get("leg_recovery_roll_weight", 1.0))
+        self.leg_recovery_pitch_weight = float(cfg.task.get("leg_recovery_pitch_weight", 1.5))
+        self.leg_recovery_height_weight = float(cfg.task.get("leg_recovery_height_weight", 1.0))
+        self.posture_recovery_roll_threshold = float(
+            cfg.task.get("posture_recovery_roll_threshold", 0.06)
+        )
+        self.posture_recovery_pitch_threshold = float(
+            cfg.task.get("posture_recovery_pitch_threshold", 0.02)
+        )
+        self.posture_recovery_width = max(
+            float(cfg.task.get("posture_recovery_width", 0.01)),
+            1e-6,
+        )
+        self.posture_recovery_roll_weight = float(
+            cfg.task.get("posture_recovery_roll_weight", 1.0)
+        )
+        self.posture_recovery_pitch_weight = float(
+            cfg.task.get("posture_recovery_pitch_weight", 1.2)
+        )
+        self.velocity_danger_gate_min = float(cfg.task.get("velocity_danger_gate_min", 0.4))
+        self.velocity_danger_gate_roll_scale = max(
+            float(cfg.task.get("velocity_danger_gate_roll_scale", 0.12)),
+            1e-6,
+        )
+        self.velocity_danger_gate_pitch_scale = max(
+            float(cfg.task.get("velocity_danger_gate_pitch_scale", 0.08)),
+            1e-6,
+        )
+        self.translation_stability_gate_min = float(
+            cfg.task.get("translation_stability_gate_min", 0.45)
+        )
         self.penalty_low_height_weight = float(cfg.task.get("penalty_low_height_weight", 0.0))
         self.soft_dof_pos_limit = float(cfg.task.get("soft_dof_pos_limit", 0.97))
         self.max_contact_force = float(cfg.task.get("max_contact_force", 100.0))
@@ -221,6 +284,11 @@ class TwoWheelBalance(IsaacEnv):
         self.reset_roll = float(cfg.task.get("reset_roll", 0.0))
         self.reset_pitch = float(cfg.task.get("reset_pitch", 0.0))
         self.roll_target = float(cfg.task.get("roll_target", 0.0))
+        self.balance_axis = str(cfg.task.get("balance_axis", "roll"))
+        if self.balance_axis not in ("roll", "pitch"):
+            raise ValueError("task.balance_axis must be 'roll' or 'pitch'")
+        self.balance_axis_index = 0 if self.balance_axis == "roll" else 1
+        self.balance_rate_index = 3 if self.balance_axis == "roll" else 4
         self.min_command_vx = float(cfg.task.get("min_command_vx", self.lin_vel_range[0]))
         self.max_command_vx = float(cfg.task.get("max_command_vx", self.lin_vel_range[1]))
         self.forward_axis_sign = float(cfg.task.forward_axis_sign)
@@ -435,6 +503,10 @@ class TwoWheelBalance(IsaacEnv):
         self.prev_tracking_ang_vel = torch.zeros(self.num_envs, 1, device=self.device)
         self.prev_velocity_error = torch.zeros(self.num_envs, 1, device=self.device)
         self.prev_yaw_rate_error = torch.zeros(self.num_envs, 1, device=self.device)
+        self.prev_recovery_error = torch.zeros(self.num_envs, 1, device=self.device)
+        self.prev_posture_recovery_error = torch.zeros(self.num_envs, 1, device=self.device)
+        self.prev_posture_error_ema = torch.zeros(self.num_envs, 1, device=self.device)
+        self.prev_height = torch.zeros(self.num_envs, 1, device=self.device)
         self.push_prob = 0.0
         if self.push_interval > 0.0 and self.kick_velocity_max > 0.0:
             self.push_prob = float(1.0 - torch.exp(
@@ -862,6 +934,11 @@ class TwoWheelBalance(IsaacEnv):
             "height_recovery_reward": UnboundedContinuousTensorSpec(1, device=self.device),
             "height_deficit": UnboundedContinuousTensorSpec(1, device=self.device),
             "height_stage_reward": UnboundedContinuousTensorSpec(1, device=self.device),
+            "leg_recovery_reward": UnboundedContinuousTensorSpec(1, device=self.device),
+            "posture_recovery_reward": UnboundedContinuousTensorSpec(1, device=self.device),
+            "leg_support_reward": UnboundedContinuousTensorSpec(1, device=self.device),
+            "posture_worsening_penalty": UnboundedContinuousTensorSpec(1, device=self.device),
+            "posture_trend_penalty": UnboundedContinuousTensorSpec(1, device=self.device),
             "terminated_roll": UnboundedContinuousTensorSpec(1, device=self.device),
             "terminated_pitch": UnboundedContinuousTensorSpec(1, device=self.device),
             "terminated_height": UnboundedContinuousTensorSpec(1, device=self.device),
@@ -939,6 +1016,7 @@ class TwoWheelBalance(IsaacEnv):
             "translation_command_fraction": UnboundedContinuousTensorSpec(1, device=self.device),
             "yaw_command_fraction": UnboundedContinuousTensorSpec(1, device=self.device),
             "velocity_reward_gate": UnboundedContinuousTensorSpec(1, device=self.device),
+            "velocity_danger_gate": UnboundedContinuousTensorSpec(1, device=self.device),
             "anneal_progress": UnboundedContinuousTensorSpec(1, device=self.device),
             "tracking_multiplier": UnboundedContinuousTensorSpec(1, device=self.device),
             "posture_multiplier": UnboundedContinuousTensorSpec(1, device=self.device),
@@ -1045,10 +1123,43 @@ class TwoWheelBalance(IsaacEnv):
         self.prev_tracking_ang_vel[env_ids] = 0.0
         self.prev_velocity_error[env_ids] = 0.0
         self.prev_yaw_rate_error[env_ids] = 0.0
+        self.prev_recovery_error[env_ids] = 0.0
+        self.prev_posture_recovery_error[env_ids] = 0.0
+        self.prev_posture_error_ema[env_ids] = 0.0
+        self.prev_height[env_ids] = 0.0
         self.prev_wheel_vel[env_ids] = self.init_joint_vel[env_ids][..., self.robot.wheel_joint_indices]
         if self.robot.num_leg_joints:
             self.prev_leg_vel[env_ids] = self.init_joint_vel[env_ids][..., self.robot.leg_joint_indices]
         self.stats[env_ids] = 0.0
+        self.robot.get_state()
+        roll = self.robot.rpy[..., 0]
+        pitch = self.robot.rpy[..., 1]
+        height = self.robot.pos[..., 2]
+        self.prev_height[env_ids] = height[env_ids]
+        command_balance_target = self._command_balance_target()
+        roll_target = torch.full_like(roll, self.roll_target)
+        pitch_target = torch.zeros_like(pitch)
+        if self.balance_axis == "roll":
+            roll_target = roll_target + command_balance_target
+        else:
+            pitch_target = pitch_target + command_balance_target
+        roll_tracking_error = roll - roll_target
+        pitch_tracking_error = pitch - pitch_target
+        height_deficit = (
+            (self.base_height_target - height).clamp_min(0.0)
+            / max(self.base_height_target - self.min_height, 1e-6)
+        ).square()
+        recovery_error = (
+            self.leg_recovery_roll_weight * roll_tracking_error.square()
+            + self.leg_recovery_pitch_weight * pitch_tracking_error.square()
+            + self.leg_recovery_height_weight * height_deficit
+        )
+        self.prev_recovery_error[env_ids] = recovery_error[env_ids]
+        posture_recovery_error = (
+            self.posture_recovery_roll_weight * roll_tracking_error.square()
+            + self.posture_recovery_pitch_weight * pitch_tracking_error.square()
+        )
+        self.prev_posture_recovery_error[env_ids] = posture_recovery_error[env_ids]
 
     def _pre_sim_step(self, tensordict: TensorDictBase):
         if self.training and self.command_resample_steps > 0:
@@ -1070,9 +1181,12 @@ class TwoWheelBalance(IsaacEnv):
                 if self.wheel_balance_use_command_target
                 else torch.zeros_like(self.robot.rpy[..., 0])
             )
-            roll_error = self.robot.rpy[..., 0] - (
+            balance_target = (
                 self.roll_target + baseline_command_target
+                if self.balance_axis == "roll"
+                else baseline_command_target
             )
+            balance_error = self.robot.rpy[..., self.balance_axis_index] - balance_target
             baseline_velocity_target = (
                 self.command[..., 0]
                 if self.wheel_balance_track_velocity_command
@@ -1094,8 +1208,8 @@ class TwoWheelBalance(IsaacEnv):
             baseline = (
                 self.wheel_balance_action_bias
                 +
-                self.wheel_balance_roll_kp * roll_error
-                + self.wheel_balance_roll_kd * self.robot.vel_b[..., 3]
+                self.wheel_balance_roll_kp * balance_error
+                + self.wheel_balance_roll_kd * self.robot.vel_b[..., self.balance_rate_index]
                 + self.wheel_balance_velocity_kd
                 * self.wheel_balance_velocity_feedback_sign
                 * forward_velocity_error
@@ -1264,12 +1378,16 @@ class TwoWheelBalance(IsaacEnv):
         leg_vel_scaled = self.robot.leg_vel / self.robot.max_leg_velocity
 
         command_balance_target = self._command_balance_target()
-        roll_target = torch.full_like(roll, self.roll_target) + command_balance_target
+        roll_target = torch.full_like(roll, self.roll_target)
+        pitch_target = torch.zeros_like(pitch)
+        if self.balance_axis == "roll":
+            roll_target = roll_target + command_balance_target
+        else:
+            pitch_target = pitch_target + command_balance_target
         roll_tracking_error = roll - roll_target
         roll_error = roll_tracking_error.abs()
         roll_rate_error = roll_rate.abs()
-        pitch_target = torch.zeros_like(pitch)
-        pitch_error = pitch.abs()
+        pitch_error = (pitch - pitch_target).abs()
         pitch_tracking_error = (pitch - pitch_target).abs()
         pitch_rate_error = pitch_rate.abs()
         height_error = (height - self.base_height_target).abs()
@@ -1349,7 +1467,12 @@ class TwoWheelBalance(IsaacEnv):
         wl_base_height = torch.exp(
             -height_error.square() / max(self.wl_height_sigma, 1e-6)
         )
-        wl_orientation = roll_tracking_error.square() + pitch_tracking_error.square()
+        orientation_cost = (
+            self.orientation_roll_cost_scale * roll_tracking_error.square()
+            + self.orientation_pitch_cost_scale * pitch_tracking_error.square()
+            + self.orientation_yaw_cost_scale * yaw_error.square()
+        )
+        wl_orientation = orientation_cost
         wl_lin_vel_z = vz.square()
         wl_ang_vel_xy = roll_rate.square() + pitch_rate.square()
         wl_action_rate = self.robot.action_difference.square()
@@ -1411,7 +1534,12 @@ class TwoWheelBalance(IsaacEnv):
             + 0.8 * leg_pos_error.square()
             + 0.2 * leg_vel_error.square()
         )
-        settle_reward = stand_reward * torch.exp(-settle_error)
+        is_standing_still = self.command[..., 0].abs() < 0.01
+        settle_reward = torch.where(
+            is_standing_still,
+            torch.exp(-settle_error),
+            torch.zeros_like(settle_error),
+        )
         # A stand-still regularizer must not oppose commanded motion. Keeping
         # zero-command samples in the move curriculum preserves standing.
         zero_command = ~command_active & ~yaw_command_active
@@ -1474,14 +1602,18 @@ class TwoWheelBalance(IsaacEnv):
         wheel_action_accel_penalty = -self.robot.wheel_action_acceleration.square()
         wheel_action_magnitude_penalty = -self.robot.wheel_action_magnitude.square()
         pure_translation = command_active & ~yaw_command_active
+        translation_stability_gate = pure_translation.float() * (
+            self.translation_stability_gate_min
+            + (1.0 - self.translation_stability_gate_min) * stand_reward
+        )
         translation_wheel_diff_penalty = (
-            -pure_translation.float() * stand_reward * wheel_vel_diff.square()
+            -translation_stability_gate * wheel_vel_diff.square()
         )
         translation_action_diff_penalty = (
-            -pure_translation.float() * stand_reward * action_diff.square()
+            -translation_stability_gate * action_diff.square()
         )
         yaw_rate_drift_penalty = (
-            -pure_translation.float() * stand_reward * yaw_rate.square()
+            -translation_stability_gate * yaw_rate.square()
         )
         action_penalty = -self.effort.square()
         smoothness_penalty = -(
@@ -1508,6 +1640,60 @@ class TwoWheelBalance(IsaacEnv):
             (self.base_height_target - height).clamp_min(0.0)
             / max(self.base_height_target - self.min_height, 1e-6)
         ).square()
+        leg_recovery_gate = torch.sigmoid(
+            (self.leg_recovery_height_threshold - height) / self.leg_recovery_height_width
+        )
+        leg_recovery_error = (
+            self.leg_recovery_roll_weight * roll_tracking_error.square()
+            + self.leg_recovery_pitch_weight * pitch_tracking_error.square()
+            + self.leg_recovery_height_weight * height_deficit
+        )
+        leg_recovery_progress = (
+            (self.prev_recovery_error - leg_recovery_error)
+            / (self.prev_recovery_error.abs() + self.recovery_progress_eps)
+        ).clamp(-1.0, 1.0)
+        leg_recovery_reward = leg_recovery_gate * torch.relu(leg_recovery_progress)
+        posture_recovery_activity = torch.maximum(
+            roll_tracking_error.abs() / max(self.posture_recovery_roll_threshold, 1e-6),
+            pitch_tracking_error.abs() / max(self.posture_recovery_pitch_threshold, 1e-6),
+        )
+        posture_recovery_gate = torch.sigmoid(
+            (posture_recovery_activity - 1.0) / self.posture_recovery_width
+        )
+        posture_recovery_error = (
+            self.posture_recovery_roll_weight * roll_tracking_error.square()
+            + self.posture_recovery_pitch_weight * pitch_tracking_error.square()
+        )
+        posture_recovery_progress = (
+            (self.prev_posture_recovery_error - posture_recovery_error)
+            / (self.prev_posture_recovery_error.abs() + self.recovery_progress_eps)
+        ).clamp(-1.0, 1.0)
+        posture_recovery_reward = posture_recovery_gate * torch.relu(posture_recovery_progress)
+        posture_worsening = (
+            (posture_recovery_error - self.prev_posture_recovery_error)
+            / (self.prev_posture_recovery_error.abs() + self.recovery_progress_eps)
+        ).clamp(0.0, 1.0)
+        posture_worsening_penalty = (
+            -command_active.float() * posture_recovery_gate * posture_worsening
+        )
+        posture_error_ema = (
+            self.posture_trend_alpha * self.prev_posture_error_ema
+            + (1.0 - self.posture_trend_alpha) * posture_recovery_error
+        )
+        posture_trend_penalty = (
+            -command_active.float()
+            * posture_recovery_gate
+            * (0.75 * posture_error_ema + 0.25 * (posture_error_ema - self.prev_posture_error_ema).clamp_min(0.0))
+        )
+        height_progress = (
+            (height - self.prev_height)
+            / max(self.base_height_target - self.min_height, 1e-6)
+        ).clamp(-1.0, 1.0)
+        support_gate = torch.maximum(leg_recovery_gate, posture_recovery_gate)
+        leg_support_reward = command_active.float() * support_gate * (
+            0.55 * torch.relu(height_progress)
+            + 0.45 * torch.relu(posture_recovery_progress)
+        )
         if self.height_stage_thresholds:
             height_thresholds = height.new_tensor(self.height_stage_thresholds)
             height_stage_progress = torch.sigmoid(
@@ -1525,9 +1711,23 @@ class TwoWheelBalance(IsaacEnv):
         target_tracking_lin_vel_enhance = torch.exp(
             -velocity_error.square() / max(self.tracking_sigma * 10.0, 1e-6)
         ) - 1.0
-        safe_target_tracking_lin_vel = stand_reward * target_tracking_lin_vel
-        safe_target_tracking_lin_vel_soft = stand_reward * target_tracking_lin_vel_soft
-        safe_target_tracking_lin_vel_enhance = stand_reward * target_tracking_lin_vel_enhance
+        move_gate = 0.35 + 0.65 * stand_reward
+        height_safety = torch.sigmoid(
+            (height - self.leg_recovery_height_threshold) / self.leg_recovery_height_width
+        )
+        posture_safety = torch.exp(
+            -(roll_tracking_error / self.velocity_danger_gate_roll_scale).square()
+            -(pitch_tracking_error / self.velocity_danger_gate_pitch_scale).square()
+        )
+        danger_gate = (
+            self.velocity_danger_gate_min
+            + (1.0 - self.velocity_danger_gate_min)
+            * torch.minimum(height_safety, posture_safety)
+        )
+        safe_move_gate = move_gate * danger_gate
+        safe_target_tracking_lin_vel = safe_move_gate * target_tracking_lin_vel
+        safe_target_tracking_lin_vel_soft = safe_move_gate * target_tracking_lin_vel_soft
+        safe_target_tracking_lin_vel_enhance = safe_move_gate * target_tracking_lin_vel_enhance
         target_tracking_ang_vel = torch.exp(
             -yaw_rate_error.square() / max(self.tracking_sigma, 1e-6)
         )
@@ -1544,24 +1744,24 @@ class TwoWheelBalance(IsaacEnv):
             / (self.wheel_radius * self.robot.max_wheel_velocity)
         ).clamp(-1.0, 1.0)
         wheel_common = 0.5 * (wheel_left + wheel_right)
-        wheel_command_tracking = command_active.float() * stand_reward * torch.exp(
+        wheel_command_tracking = command_active.float() * safe_move_gate * torch.exp(
             -(wheel_common - target_wheel_common).square()
             / max(self.wheel_command_tracking_sigma, 1e-6)
         )
         normalized_velocity_error = (
             velocity_error / command_vx.abs().clamp_min(self.command_active_vx)
         ).clamp(0.0, 3.0)
-        normalized_velocity_tracking = command_active.float() * stand_reward * torch.exp(
+        normalized_velocity_tracking = command_active.float() * safe_move_gate * torch.exp(
             -normalized_velocity_error.square() / max(self.normalized_lin_vel_sigma, 1e-6)
         )
         active_velocity_error_penalty = (
-            -command_active.float() * stand_reward * normalized_velocity_error.square()
+            -command_active.float() * safe_move_gate * normalized_velocity_error.square()
         )
         scaled_velocity_error = (
             velocity_error / max(self.lin_vel_tracking_square_scale, 1e-6)
         ).clamp(0.0, 3.0)
         lin_vel_tracking_square_penalty = (
-            -command_active.float() * stand_reward * scaled_velocity_error.square()
+            -command_active.float() * safe_move_gate * scaled_velocity_error.square()
         )
         target_base_height = torch.exp(-base_height_target_error.square() / 0.001)
         if self.robot.num_leg_joints >= 4:
@@ -1572,7 +1772,7 @@ class TwoWheelBalance(IsaacEnv):
             target_nominal_state = leg_pos_error.square()
         target_lin_vel_z = vz.square()
         target_ang_vel_xy = roll_rate.square() + pitch_rate.square()
-        target_orientation = roll_tracking_error.square() + pitch_tracking_error.square()
+        target_orientation = orientation_cost
         target_dof_vel = self.robot.wheel_vel.square().sum(-1)
         if self.robot.num_leg_joints:
             target_dof_vel = target_dof_vel + self.robot.leg_vel.square().sum(-1)
@@ -1603,6 +1803,11 @@ class TwoWheelBalance(IsaacEnv):
             + self.reward_height_weight * _as_column(reward_height)
             + self.reward_settle_weight * _as_column(settle_reward)
             + self.reward_leg_neutral_weight * _as_column(reward_leg_neutral)
+            + self.reward_leg_recovery_weight * _as_column(leg_recovery_reward)
+            + self.reward_posture_recovery_weight * _as_column(posture_recovery_reward)
+            + self.reward_leg_support_weight * _as_column(leg_support_reward)
+            + self.penalty_posture_worsening_weight * _as_column(posture_worsening_penalty)
+            + self.posture_trend_weight * _as_column(posture_trend_penalty)
             + self.penalty_fall_weight * _as_column(fall_penalty)
             + self._posture_multiplier * self.penalty_roll_weight * _as_column(roll_penalty)
             + self._posture_multiplier * self.penalty_roll_rate_weight * _as_column(roll_rate_penalty)
@@ -1641,13 +1846,13 @@ class TwoWheelBalance(IsaacEnv):
             + self.penalty_leg_vel_weight * _as_column(leg_vel_penalty)
             + self.penalty_leg_action_weight * _as_column(leg_action_penalty)
             + self.penalty_leg_action_diff_weight * _as_column(leg_action_diff_penalty)
-            + self.reward_velocity_weight * _as_column(stand_reward * reward_velocity)
+            + self.reward_velocity_weight * _as_column(safe_move_gate * reward_velocity)
             + self.reward_direction_weight
-            * _as_column(command_active.float() * stand_reward * reward_direction)
+            * _as_column(command_active.float() * safe_move_gate * reward_direction)
             + self.reward_forward_progress_weight
-            * _as_column(command_active.float() * stand_reward * forward_progress)
+            * _as_column(command_active.float() * safe_move_gate * forward_progress)
             + self.reward_displacement_progress_weight
-            * _as_column(command_active.float() * stand_reward * displacement_progress)
+            * _as_column(command_active.float() * safe_move_gate * displacement_progress)
             + self.penalty_forward_deficit_weight * _as_column(forward_deficit_penalty)
             + self.penalty_speed_shortfall_weight * _as_column(speed_shortfall_penalty)
             + self.reward_position_weight * _as_column(stand_reward * reward_position)
@@ -1661,7 +1866,7 @@ class TwoWheelBalance(IsaacEnv):
             + self.reward_tracking_ang_vel_enhance_weight * _as_column(target_tracking_ang_vel_enhance)
             + self.reward_tracking_lin_vel_pbrs_weight * _as_column(tracking_lin_vel_pbrs)
             + self.reward_tracking_ang_vel_pbrs_weight * _as_column(tracking_ang_vel_pbrs)
-            + self.reward_velocity_progress_weight * _as_column(stand_reward * velocity_progress)
+            + self.reward_velocity_progress_weight * _as_column(safe_move_gate * velocity_progress)
             + self.reward_yaw_rate_progress_weight * _as_column(stand_reward * yaw_rate_progress)
             + self.reward_joint_symmetry_weight * _as_column(joint_symmetry_reward)
             + self.reward_wheel_command_tracking_weight * _as_column(wheel_command_tracking)
@@ -1702,6 +1907,11 @@ class TwoWheelBalance(IsaacEnv):
         self.stats["height_recovery_reward"].lerp_(height_recovery_reward, 1 - self.alpha)
         self.stats["height_deficit"].lerp_(height_deficit, 1 - self.alpha)
         self.stats["height_stage_reward"].lerp_(height_stage_reward, 1 - self.alpha)
+        self.stats["leg_recovery_reward"].lerp_(leg_recovery_reward, 1 - self.alpha)
+        self.stats["posture_recovery_reward"].lerp_(posture_recovery_reward, 1 - self.alpha)
+        self.stats["leg_support_reward"].lerp_(leg_support_reward, 1 - self.alpha)
+        self.stats["posture_worsening_penalty"].lerp_(posture_worsening_penalty, 1 - self.alpha)
+        self.stats["posture_trend_penalty"].lerp_(posture_trend_penalty, 1 - self.alpha)
         self.stats["terminated_roll"].lerp_(terminated_roll.float(), 1 - self.alpha)
         self.stats["terminated_pitch"].lerp_(terminated_pitch.float(), 1 - self.alpha)
         self.stats["terminated_height"].lerp_(terminated_height.float(), 1 - self.alpha)
@@ -1817,7 +2027,8 @@ class TwoWheelBalance(IsaacEnv):
         self.stats["yaw_command_fraction"].lerp_(
             yaw_command_active.float(), 1 - self.alpha
         )
-        self.stats["velocity_reward_gate"].lerp_(stand_reward, 1 - self.alpha)
+        self.stats["velocity_reward_gate"].lerp_(safe_move_gate, 1 - self.alpha)
+        self.stats["velocity_danger_gate"].lerp_(danger_gate, 1 - self.alpha)
         self.stats["anneal_progress"].lerp_(
             torch.full_like(height, self._anneal_progress),
             1 - self.alpha,
@@ -1845,6 +2056,10 @@ class TwoWheelBalance(IsaacEnv):
         self.prev_tracking_ang_vel[:] = _as_column(target_tracking_ang_vel)
         self.prev_velocity_error[:] = _as_column(velocity_error)
         self.prev_yaw_rate_error[:] = _as_column(yaw_rate_error)
+        self.prev_recovery_error[:] = _as_column(leg_recovery_error)
+        self.prev_posture_recovery_error[:] = _as_column(posture_recovery_error)
+        self.prev_posture_error_ema[:] = _as_column(posture_error_ema)
+        self.prev_height[:] = _as_column(height)
         self.prev_wheel_vel[:] = self.robot.wheel_vel
         if self.robot.num_leg_joints:
             self.prev_leg_vel[:] = self.robot.leg_vel

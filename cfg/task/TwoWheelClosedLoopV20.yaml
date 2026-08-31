@@ -4,27 +4,43 @@ defaults:
 
 name: TwoWheelClosedLoop
 
-# V20 is a Stage-0 balance pretraining task. V17-V19 showed that adding
-# translation before wheel balance is learned makes PPO exploit leaning/falling
-# modes instead of discovering the inverted-pendulum loop.
-train_stage: stand
-lin_vel_range: [0.0, 0.0]
+# V20 is a stand-to-move curriculum. V17-V19 showed that full translation from
+# the first frame makes PPO exploit leaning/falling modes; this version first
+# learns the wheel balance loop, then gradually exposes small translation.
+train_stage: move
+lin_vel_range: [-0.8, 0.8]
 min_command_vx: 0.0
 max_command_vx: 0.0
-command_zero_prob: 1.0
-command_stratified_sampling: false
+command_zero_prob: 0.35
+command_stratified_sampling: true
 command_yaw_only_prob: 0.0
 command_mixed_prob: 0.0
+command_min_move_speed: 0.05
+command_active_vx: 0.02
 max_command_yaw_rate: 0.0
 eval_command_vx: 0.0
-eval_move_command_vx: 0.0
+eval_move_command_vx: 0.08
 eval_command_yaw_rate: 0.0
+command_curriculum_enabled: true
+command_curriculum_start_frame: 6000000
+command_curriculum_end_frame: 49152000
+lin_vel_curriculum_start: [-0.2, 0.2]
+lin_vel_curriculum_end: [-0.8, 0.8]
+yaw_rate_curriculum_start: 0.0
+yaw_rate_curriculum_end: 0.0
+reward_anneal_enabled: true
+reward_anneal_start_frame: 0
+reward_anneal_end_frame: 6000000
+tracking_lin_vel_multiplier_start: 0.35
+tracking_lin_vel_multiplier_end: 1.0
+posture_multiplier_start: 1.0
+posture_multiplier_end: 0.70
 
 # Use the accepted same-wheel torque bias from diagnostics as a deployable
 # baseline prior, then let the policy learn only a tiny residual around it.
 wheel_balance_baseline_enabled: true
-wheel_balance_use_command_target: false
-wheel_balance_track_velocity_command: false
+wheel_balance_use_command_target: true
+wheel_balance_track_velocity_command: true
 wheel_balance_action_bias: 0.2214
 wheel_balance_roll_kp: 16.0
 wheel_balance_roll_kd: 1.75
@@ -34,9 +50,12 @@ wheel_balance_position_kp: -0.01
 wheel_balance_yaw_kp: -0.2
 wheel_balance_yaw_kd: 0.0
 wheel_balance_baseline_limit: 0.45
-wheel_balance_feedforward_limit: 0.0
+command_balance_gain: 0.25
+command_balance_limit: 0.20
+command_balance_sign: -1.0
+wheel_balance_feedforward_limit: 0.18
 wheel_balance_yaw_limit: 0.05
-wheel_command_feedforward_gain: 0.0
+wheel_command_feedforward_gain: 1.3
 wheel_command_bias: 0.0
 
 wheel_residual_scale: 0.015
@@ -44,17 +63,22 @@ wheel_residual_curriculum_enabled: true
 wheel_residual_curriculum_start_frame: 0
 wheel_residual_curriculum_end_frame: 49152000
 wheel_residual_scale_start: 0.005
-wheel_residual_scale_end: 0.03
-penalty_policy_wheel_residual_weight: 80.0
+wheel_residual_scale_end: 0.16
+penalty_policy_wheel_residual_weight: 18.0
 
-# Keep the legs essentially neutral during balance pretraining.
-leg_policy_scale: 0.0
-leg_policy_curriculum_enabled: false
-reward_leg_neutral_weight: 2.0
-penalty_leg_pos_weight: 0.8
-penalty_leg_vel_weight: 0.3
-penalty_leg_action_weight: 0.2
-penalty_leg_action_diff_weight: 0.4
+# Expose leg control by gradient, but after wheel balance has a foothold.
+leg_policy_scale: 0.05
+leg_policy_curriculum_enabled: true
+leg_policy_curriculum_start_frame: 0
+leg_policy_curriculum_end_frame: 49152000
+leg_policy_scale_start: 0.05
+leg_policy_scale_end: 0.5
+reward_leg_neutral_weight: 0.6
+penalty_leg_pos_weight: 0.18
+penalty_leg_vel_weight: 0.12
+penalty_leg_action_weight: 0.04
+penalty_leg_action_diff_weight: 1.2
+reward_joint_symmetry_weight: 2.0
 
 # First learn passive standing around the known-good pose; introduce only very
 # small reset perturbations late in training.
@@ -68,38 +92,46 @@ kick_velocity_max: 0.0
 kick_balance_rate_min: 0.0
 kick_balance_rate_max: 0.0
 disturbance_curriculum_enabled: true
-disturbance_curriculum_start_frame: 12000000
+disturbance_curriculum_start_frame: 6000000
 disturbance_curriculum_end_frame: 49152000
 disturbance_scale_start: 0.0
 disturbance_scale_end: 1.0
 eval_disturbances: false
 
-# Remove all locomotion incentives. The only way to score well is to stay
-# upright, near target height, quiet, and centered.
-reward_velocity_weight: 0.0
-reward_direction_weight: 0.0
-reward_forward_progress_weight: 0.0
-reward_displacement_progress_weight: 0.0
+# Keep locomotion incentives gated by posture and delayed by reward annealing.
+reward_velocity_weight: 1.8
+reward_direction_weight: 2.0
+reward_forward_progress_weight: 8.0
+reward_displacement_progress_weight: 2.0
 penalty_forward_deficit_weight: 0.0
 penalty_speed_shortfall_weight: 0.0
-reward_tracking_lin_vel_weight: 0.0
+reward_tracking_lin_vel_weight: 9.0
+reward_tracking_lin_vel_soft_weight: 3.0
 reward_tracking_lin_vel_enhance_weight: 0.0
 wl_tracking_lin_vel_weight: 0.0
 reward_tracking_ang_vel_weight: 0.0
 reward_tracking_ang_vel_enhance_weight: 0.0
 wl_tracking_ang_vel_weight: 0.0
-reward_wheel_command_tracking_weight: 0.0
-reward_command_action_alignment_weight: 0.0
+reward_wheel_command_tracking_weight: 7.0
+reward_normalized_lin_vel_weight: 4.0
+penalty_active_velocity_error_weight: 1.2
+penalty_lin_vel_tracking_square_weight: 0.6
+reward_command_action_alignment_weight: 2.0
 
 reward_alive_weight: 1.0
 reward_stand_weight: 42.0
 reward_height_weight: 45.0
 reward_settle_weight: 16.0
 penalty_fall_weight: 100.0
+termination_pitch: 0.35
+orientation_roll_cost_scale: 1.0
+orientation_pitch_cost_scale: 1.5
+orientation_yaw_cost_scale: 1.5
 penalty_roll_weight: 260.0
 penalty_roll_rate_weight: 12.0
-penalty_pitch_weight: 70.0
+penalty_pitch_weight: 390.0
 penalty_pitch_rate_weight: 6.0
+penalty_yaw_weight: 390.0
 penalty_position_weight: 50.0
 penalty_lateral_velocity_weight: 10.0
 penalty_lin_vel_z_weight: 2.0
@@ -116,14 +148,21 @@ penalty_wheel_action_magnitude_weight: 0.08
 penalty_quiet_wheel_weight: 1.5
 
 robot:
+  leg_joint_names: [L12, L45, R12, R45]
   action_smoothing: 1.0
   action_rate_limit: 0.0
   action_accel_limit: 0.0
-  lock_leg_actions: true
+  lock_leg_actions: false
+  leg_position_scale: 0.45
+  max_leg_velocity: 0.8
+  leg_action_smoothing: 0.10
+  leg_action_rate_limit: 0.008
+  leg_velocity_actions: false
   wheel_effort_actions: true
   wheel_effort_limit: 2.46
   wheel_drive_stiffness: 0.0
   wheel_drive_damping: 0.0
   wheel_drive_max_force: 2.46
   wheel_drive_max_velocity: 20.0
+  leg_drive_max_force: 10.0
   passive_joint_friction: 0.20

@@ -1,0 +1,40 @@
+defaults:
+  - TwoWheelClosedLoopV33
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V33 TensorBoard result:
+# - leg_action_magnitude fell from ~0.75 to ~0.12, so the anti-busy-leg shaping
+#   worked.
+# - forward_velocity became negative and velocity_reward_gate fell to ~0.39, so
+#   speed gradients were gated too hard.
+# V34 keeps the recovery shaping but restores enough locomotion incentive.
+velocity_danger_gate_min: 0.65
+velocity_danger_gate_roll_scale: 0.12
+velocity_danger_gate_pitch_scale: 0.09
+translation_stability_gate_min: 0.50
+
+tracking_lin_vel_multiplier_end: 1.0
+reward_normalized_lin_vel_weight: 2.5
+penalty_active_velocity_error_weight: 0.18
+
+# Keep leg motion useful but not frozen. This is intentionally between V32's
+# busy legs and V33's over-damped legs.
+leg_policy_scale_end: 0.55
+penalty_leg_action_weight: 0.08
+penalty_leg_action_diff_weight: 2.5
+penalty_leg_vel_weight: 0.22
+
+# Preserve posture recovery pressure, but avoid making the policy afraid of
+# commanded forward lean.
+reward_leg_recovery_weight: 5.0
+reward_posture_recovery_weight: 6.0
+reward_leg_support_weight: 4.0
+penalty_posture_worsening_weight: 4.0
+penalty_roll_weight: 160.0
+penalty_roll_rate_weight: 34.0
+command_balance_gain: 0.09
+command_balance_limit: 0.11
+wheel_balance_roll_kd: 2.6
+wheel_balance_velocity_kd: 0.24

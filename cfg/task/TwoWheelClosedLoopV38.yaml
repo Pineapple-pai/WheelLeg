@@ -1,0 +1,68 @@
+defaults:
+  - TwoWheelClosedLoopV37
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V37 replay showed "move a little, then get pulled back". The main mismatch is
+# that fine-tuning from a mature V35 checkpoint reset the action curricula:
+# wheel_residual_scale and leg_policy_scale became too small again, so the
+# policy had little authority and the balance baseline dominated.
+
+# Preserve V35's proven speed curriculum shape for fine-tuning, with most early
+# samples still in the low-speed range.
+lin_vel_range: [-1.0, 1.0]
+lin_vel_curriculum_start: [-0.08, 0.08]
+lin_vel_curriculum_end: [-1.0, 1.0]
+command_curriculum_start_frame: 2000000
+command_curriculum_end_frame: 180000000
+tracking_lin_vel_multiplier_start: 0.45
+tracking_lin_vel_multiplier_end: 1.05
+reward_anneal_start_frame: 0
+reward_anneal_end_frame: 80000000
+posture_multiplier_start: 1.0
+posture_multiplier_end: 0.95
+
+# Fine-tuning should not relearn with tiny wheel/leg authority. Start close to
+# V35's mature regime so the policy can hold a small commanded lean instead of
+# being dragged back to standstill by the baseline controller.
+wheel_residual_scale_start: 0.09
+wheel_residual_scale_end: 0.18
+wheel_residual_curriculum_start_frame: 0
+wheel_residual_curriculum_end_frame: 25000000
+leg_policy_scale_start: 0.35
+leg_policy_scale_end: 0.60
+leg_policy_curriculum_start_frame: 0
+leg_policy_curriculum_end_frame: 25000000
+
+# Keep moving samples dominant, but do not make the first fine-tune phase too
+# aggressive.
+command_zero_prob: 0.12
+command_stratified_sampling: true
+command_min_move_speed: 0.08
+
+# V37's long-horizon trend term was useful diagnostically but too eager around
+# small commanded lean. Only activate it once posture error is clearly outside
+# the normal tracking band.
+posture_trend_weight: 0.6
+posture_trend_alpha: 0.992
+posture_recovery_roll_threshold: 0.085
+posture_recovery_pitch_threshold: 0.030
+reward_posture_recovery_weight: 4.0
+penalty_posture_worsening_weight: 2.5
+
+# Reduce the "snap back to upright" feel while keeping enough damping against
+# the slow touchdown failure.
+penalty_roll_weight: 145.0
+penalty_roll_rate_weight: 30.0
+wheel_balance_roll_kd: 2.2
+wheel_balance_velocity_kd: 0.18
+command_balance_gain: 0.105
+command_balance_limit: 0.13
+
+# Keep velocity attractive, but avoid rewarding uncontrolled acceleration more
+# than recovery.
+reward_normalized_lin_vel_weight: 3.5
+reward_wheel_command_tracking_weight: 9.0
+reward_command_action_alignment_weight: 3.5
+penalty_active_velocity_error_weight: 0.24

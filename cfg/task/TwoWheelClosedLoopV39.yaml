@@ -1,0 +1,40 @@
+defaults:
+  - TwoWheelClosedLoopV38
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V39 switches from the open-tree training USD to the repaired CAD USD with
+# explicit loop-closure joints. This matches the Mujoco model topology much
+# better, so the leg linkage can provide real support instead of behaving like
+# a weak open chain.
+robot:
+  usd_path: /home/p/下载/WheelLeg/omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda
+  wheel_radius: 0.055
+  wheel_velocity_sign: [-1.0, -1.0]
+
+# The repaired CAD USD has the wheel rolling polarity opposite to the previous
+# training USD: a positive raw wheel velocity produced negative forward_v in the
+# actuator smoke test. Keep positive policy action intuitive by flipping the
+# drive sign, and make wheel-velocity reward expect the resulting raw velocity.
+wheel_command_tracking_sign: -1.0
+
+# Do not continue from old open-tree checkpoints for the first CAD-topology
+# validation run. The dynamics changed enough that a short scratch run is more
+# informative than forcing old weights onto the repaired articulation.
+lin_vel_curriculum_start: [-0.06, 0.06]
+lin_vel_curriculum_end: [-0.40, 0.40]
+command_curriculum_start_frame: 500000
+command_curriculum_end_frame: 30000000
+command_min_move_speed: 0.05
+
+# Keep the repaired linkage calm while we validate whether it removes the
+# forward-touchdown asymmetry.
+wheel_residual_scale_start: 0.08
+wheel_residual_scale_end: 0.16
+leg_policy_scale_start: 0.25
+leg_policy_scale_end: 0.50
+posture_trend_weight: 0.4
+reward_normalized_lin_vel_weight: 3.0
+reward_wheel_command_tracking_weight: 8.0
+penalty_active_velocity_error_weight: 0.22

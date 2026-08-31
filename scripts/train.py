@@ -12,6 +12,7 @@ import numpy as np
 import wandb
 
 from torch.func import vmap
+from torch.utils.tensorboard import SummaryWriter
 from omegaconf import OmegaConf
 
 from omni_drones import init_simulation_app
@@ -35,6 +36,10 @@ from torchrl.envs.transforms import TransformedEnv, InitTracker, Compose
 CHECKPOINT_ROOT = os.environ.get(
     "WHEELLEG_CHECKPOINT_ROOT",
     os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "checkpoints")),
+)
+TENSORBOARD_ROOT = os.environ.get(
+    "WHEELLEG_TENSORBOARD_ROOT",
+    os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tb_runs")),
 )
 
 
@@ -60,6 +65,16 @@ TRACKED_STATE_STATS_KEYS = (
     "stats.tracking_lin_vel_soft",
     "stats.wheel_command_tracking",
     "stats.normalized_velocity_tracking",
+    "stats.velocity_danger_gate",
+    "stats.leg_recovery_reward",
+    "stats.posture_recovery_reward",
+    "stats.leg_support_reward",
+    "stats.posture_worsening_penalty",
+    "stats.posture_trend_penalty",
+    "stats.height_deficit",
+    "stats.terminated_roll",
+    "stats.terminated_pitch",
+    "stats.terminated_height",
     "stats.active_velocity_error_penalty",
     "stats.lin_vel_tracking_square_penalty",
     "stats.wheel_residual_scale",
@@ -268,6 +283,23 @@ def _checkpoint_path(cfg, name):
     return os.path.join(_checkpoint_dir(cfg), name)
 
 
+def _tensorboard_dir(cfg):
+    root = str(cfg.get("tensorboard", {}).get("log_dir", TENSORBOARD_ROOT))
+    version = str(cfg.get("checkpoint_version", "v1"))
+    return os.path.join(root, version)
+
+
+def _log_tensorboard_scalars(writer, info, step):
+    if writer is None:
+        return
+    for key, value in info.items():
+        scalar = _mean_tensor(value)
+        if scalar is None:
+            continue
+        writer.add_scalar(key, scalar, step)
+    writer.flush()
+
+
 def _select_fields(info, keys):
     items = []
     for key in keys:
@@ -313,6 +345,13 @@ def main(cfg):
     run = init_wandb(cfg)
     setproctitle(run.name)
     os.makedirs(_checkpoint_dir(cfg), exist_ok=True)
+    tensorboard_enabled = bool(cfg.get("tensorboard", {}).get("enabled", False))
+    tb_writer = None
+    if tensorboard_enabled:
+        tb_log_dir = _tensorboard_dir(cfg)
+        os.makedirs(tb_log_dir, exist_ok=True)
+        tb_writer = SummaryWriter(log_dir=tb_log_dir)
+        logging.info(f"TensorBoard logging to {tb_log_dir}")
 
     env_class = resolve_env_class(cfg.task.name)
     base_env = env_class(cfg, headless=cfg.headless)
@@ -566,6 +605,7 @@ def main(cfg):
             base_env.train()
 
         run.log(info)
+        _log_tensorboard_scalars(tb_writer, info, collector._frames)
         state_items = [
             ("iter", f"{i + 1}/{max_iters}" if max_iters > 0 else i + 1),
             ("frames", f"{collector._frames}/{total_frames}" if total_frames > 0 else collector._frames),
@@ -623,6 +663,7 @@ def main(cfg):
         final_info.update({k: v for k, v in info.items() if k.startswith("eval/")})
     info = final_info
     run.log(info)
+    _log_tensorboard_scalars(tb_writer, info, collector._frames)
     final_items = [("env_frames", info["env_frames"])]
     final_items.extend(_select_fields(info, TRACKED_EVAL_KEYS))
     final_items.extend(_select_fields(info, TRACKED_EVAL_ROBUST_KEYS))
@@ -649,6 +690,8 @@ def main(cfg):
         logging.warning(f"Policy {policy} does not implement `.state_dict()`")
 
     wandb.finish()
+    if tb_writer is not None:
+        tb_writer.close()
 
     simulation_app.close()
 

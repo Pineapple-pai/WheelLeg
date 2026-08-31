@@ -1,0 +1,71 @@
+defaults:
+  - TwoWheelClosedLoopV21
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# V22 switches training to the wheel velocity-drive path. Manual testing showed
+# velocity targets move the robot clearly, while the effort-action path used by
+# V20/V21 does not provide a reliable same-wheel translation actuator here.
+wheel_command_tracking_sign: 1.0
+wheel_command_feedforward_gain: 1.0
+wheel_balance_feedforward_limit: 0.11
+tracking_lin_vel_multiplier_end: 1.0
+
+# Velocity-drive training needs a much weaker "do not lean" prior than the
+# effort-drive V20/V21 runs; otherwise standing remains the easiest optimum.
+reward_settle_weight: 0.0
+reward_height_weight: 12.0
+reward_base_height_weight: 2.0
+penalty_low_height_weight: 80.0
+penalty_height_deficit_weight: 10.0
+height_floor: 0.082
+penalty_roll_weight: 150.0
+penalty_roll_rate_weight: 30.0
+wheel_balance_action_bias: 0.0
+wheel_balance_roll_kp: 7.0
+wheel_balance_baseline_limit: 0.30
+command_balance_gain: 0.10
+command_balance_limit: 0.12
+wheel_balance_roll_kd: 2.4
+wheel_balance_velocity_kd: 0.28
+wheel_balance_velocity_feedback_sign: -1.0
+reward_leg_recovery_weight: 1.4
+reward_posture_recovery_weight: 2.6
+reward_leg_neutral_weight: 0.35
+leg_recovery_height_threshold: 0.084
+leg_recovery_height_width: 0.008
+leg_recovery_roll_weight: 1.0
+leg_recovery_pitch_weight: 1.5
+leg_recovery_height_weight: 1.0
+posture_recovery_roll_threshold: 0.05
+posture_recovery_pitch_threshold: 0.015
+posture_recovery_width: 0.012
+posture_recovery_roll_weight: 1.0
+posture_recovery_pitch_weight: 1.2
+velocity_danger_gate_min: 0.55
+velocity_danger_gate_roll_scale: 0.16
+velocity_danger_gate_pitch_scale: 0.10
+translation_stability_gate_min: 0.45
+leg_policy_scale: 0.14
+leg_policy_scale_start: 0.14
+leg_policy_scale_end: 0.65
+penalty_leg_pos_weight: 0.14
+penalty_leg_vel_weight: 0.18
+penalty_leg_action_weight: 0.05
+penalty_leg_action_diff_weight: 1.8
+
+robot:
+  wheel_effort_actions: false
+  wheel_velocity_sign: [1.0, 1.0]
+  wheel_drive_stiffness: 0.0
+  wheel_drive_damping: 4.0
+  wheel_drive_max_force: 12.0
+  wheel_drive_max_velocity: 20.0
+  action_smoothing: 0.55
+  action_rate_limit: 0.35
+  action_accel_limit: 0.25
+  leg_position_scale: 0.24
+  leg_drive_stiffness: 170.0
+  leg_drive_damping: 36.0
+  leg_drive_max_force: 130.0

@@ -1,0 +1,44 @@
+defaults:
+  - TwoWheelClosedLoopV22
+  - _self_
+
+name: TwoWheelClosedLoop
+
+# TensorBoard diagnosis from V29 -> V32:
+# V32 gained forward velocity, but leg_action_magnitude and roll_error rose
+# together while episode_len dropped. This version keeps forward motion but
+# rewards actual posture recovery instead of merely larger leg motion.
+reward_leg_recovery_weight: 5.0
+reward_posture_recovery_weight: 6.0
+penalty_posture_worsening_weight: 5.0
+recovery_progress_eps: 0.015
+
+# Make the safety gate respond sooner when forward lean keeps growing. The
+# minimum gate stays nonzero so velocity gradients are not cut off entirely.
+velocity_danger_gate_min: 0.40
+velocity_danger_gate_roll_scale: 0.10
+velocity_danger_gate_pitch_scale: 0.08
+translation_stability_gate_min: 0.55
+
+# V32's legs became visibly busy without preventing touchdown. Keep enough
+# authority for support, but increase smoothness pressure so the policy must
+# use slower, useful leg motion.
+leg_policy_scale: 0.14
+leg_policy_scale_start: 0.14
+leg_policy_scale_end: 0.45
+penalty_leg_action_weight: 0.12
+penalty_leg_action_diff_weight: 4.0
+penalty_leg_vel_weight: 0.25
+reward_leg_neutral_weight: 0.25
+
+# Preserve movement, but reduce the incentive to keep accelerating while the
+# posture is already drifting toward contact.
+tracking_lin_vel_multiplier_end: 0.85
+reward_normalized_lin_vel_weight: 2.0
+penalty_active_velocity_error_weight: 0.25
+penalty_roll_weight: 170.0
+penalty_roll_rate_weight: 38.0
+command_balance_gain: 0.09
+command_balance_limit: 0.11
+wheel_balance_roll_kd: 2.8
+wheel_balance_velocity_kd: 0.24
