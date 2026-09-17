@@ -1,5 +1,12 @@
 # UZ-05 模型与实物部署审计
 
+> ⚠️ **时效说明（2026-09）**：本文写于 Isaac Sim 时期，文中的
+> `omni_drones/robots/assets/twowheel_uz05/usd/*.usda` 路径与 USD 生成流程已随旧项目移除。
+> **仍然有效的部分**：机械质量、减速比、额定/峰值力矩、闭链结构、限位与接触等硬件结论，
+> 以及"哪些能力不可训练/不可部署"的判定。当前 MuJoCo 实现见
+> [uz05_refactor.md](uz05_refactor.md)。
+
+
 审计对象：
 
 - 原始 URDF：`/home/p/下载/UZ-05-open总装11.57/urdf/UZ-05-open总装11.57.urdf`

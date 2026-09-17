@@ -14,10 +14,13 @@ The original `chassis/mates.csv` contains two failing concentric mates, `同心2
 
 After rebuild, the repaired chassis evaluates to `15.682344 kg`. The repaired USD preserves moving-link masses and assigns the remaining complete-assembly equivalent mass/inertia to `base_link`; its aggregate mass and zero-pose COM match the full SolidWorks assembly (`18.687170 kg`, `[-0.01147962, -0.00286462, 0.11737280] m`) within `1e-6`.
 
-Generated static repair assets:
+Generated static repair assets（⚠️ 这两个产物随 Isaac 旧项目在 2026-09 一并删除，
+需要时 `git checkout HEAD -- omni_drones/robots/assets/twowheel_uz05` 找回）:
 
-- `omni_drones/robots/assets/twowheel_uz05/urdf/twowheel_uz05.cad_repaired.urdf`
-- `omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda`
+- ~~`omni_drones/robots/assets/twowheel_uz05/urdf/twowheel_uz05.cad_repaired.urdf`~~
+- ~~`omni_drones/robots/assets/twowheel_uz05/usd/twowheel_uz05.cad_repaired.usda`~~
+
+当前 MuJoCo 训练用的是 `diagnostics/uz05.xml`（由本目录的 SolidWorks 装配导出）。
 
 The active assembly contains 20T-to-20T chain stages, so those stages have a
 geometric ratio of 1:1. Hardware information supplied after extraction gives a
