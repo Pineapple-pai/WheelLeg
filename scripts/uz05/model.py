@@ -93,8 +93,26 @@ def _build_xml(terrain: TerrainSpec, visual: bool = False) -> str:
     friction = " ".join(str(v) for v in terrain.friction)
     ET.SubElement(
         worldbody, "geom", name="ground", type="plane", size="20 20 0.1",
-        friction=friction, rgba="0.30 0.33 0.36 1",
+        friction=friction, rgba="0.25 0.28 0.31 1",
     )
+    if visual:
+        # Large, low-contrast checkerboard for replay only. These boxes are
+        # visual-only, so the physical plane and its friction remain unchanged.
+        tile_half_extent = 6.0
+        tile_size = 0.60
+        tile_z = 0.002
+        tile_count = int(round(2.0 * tile_half_extent / tile_size))
+        tile_colors = ("0.17 0.20 0.23 1", "0.28 0.31 0.34 1")
+        for ix in range(tile_count):
+            x = -tile_half_extent + (ix + 0.5) * tile_size
+            for iy in range(tile_count):
+                y = -tile_half_extent + (iy + 0.5) * tile_size
+                ET.SubElement(
+                    worldbody, "geom", name=f"replay_tile_{ix}_{iy}", type="box",
+                    pos=f"{x:.5f} {y:.5f} {tile_z:.5f}",
+                    size=f"{tile_size / 2:.5f} {tile_size / 2:.5f} 0.001",
+                    rgba=tile_colors[(ix + iy) % 2], contype="0", conaffinity="0",
+                )
     if terrain.kind == "stairs":
         for index in range(terrain.num_steps):
             height = terrain.step_height * (index + 1)

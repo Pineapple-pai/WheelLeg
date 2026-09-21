@@ -1,0 +1,28 @@
+{
+  "base": {
+    "valid": false,
+    "n": 47,
+    "term": "tilt_limit"
+  },
+  "h": 0.06,
+  "c+": {
+    "valid": false,
+    "n": 44,
+    "term": "tilt_limit"
+  },
+  "c-": {
+    "valid": false,
+    "n": 59,
+    "term": "tilt_limit"
+  },
+  "d+": {
+    "valid": false,
+    "n": 47,
+    "term": "tilt_limit"
+  },
+  "d-": {
+    "valid": false,
+    "n": 48,
+    "term": "tilt_limit"
+  }
+}

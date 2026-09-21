@@ -151,3 +151,19 @@ examples/*.mp4
 
 # sphinx docs output
 docs/html
+
+# WheelLeg generated training and experiment artifacts
+/checkpoints/
+/runs/
+/logs/
+/replays/
+
+# TensorBoard event files created outside runs/
+*.tfevents.*
+
+# Simulation/replay media
+*.mp4
+*.webm
+
+# Local assistant/project settings
+/.claude/

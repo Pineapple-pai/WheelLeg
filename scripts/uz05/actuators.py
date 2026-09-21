@@ -28,6 +28,14 @@ from .spec import (
 #   于是"文档说对齐官方 0.35、代码其实没对齐"——现在改成直接读 spec。）
 ACTION_SCALE: dict[str, float] = {name: scale for name, _, scale in ACTION_SPEC}
 POS_ACTION_SCALE = ACTION_SCALE["hip_position_offset"]   # 官方 pos_action_scale = 0.35
+# ★ 腿**差模**通道的独立缩放（rad / 归一化动作）。
+#
+# 为什么需要单独一个缩放：差模负责腿长，而腿机构能伸到 0.3765 m（无载实测），
+# 但共模那 0.35 rad/动作 的缩放套在差模上时，只能给出 ±0.35 rad 关节差，
+# 对应约 ±91 mm 腿长 —— 于是腿长被**动作缩放**卡在 ~0.26 m，而不是机构极限。
+# 实测（`diag_leg_load_limit.py`）：关节差模 0.6 rad 时带载腿长 0.376 m。
+# 取 0.7 rad 覆盖 0.15~0.35 m 全行程（q2 与 q4 反向，各自仍不超 0.7 rad）。
+LEG_DIFF_ACTION_SCALE = 0.70
 WHEEL_COMMON_SCALE = ACTION_SCALE["wheel_common"]        # 官方 vel_action_scale = 8.0
 WHEEL_DIFF_SCALE = ACTION_SCALE["wheel_differential"]
 
@@ -84,9 +92,15 @@ class WheelEscController:
 
 @dataclass
 class BalanceController:
-    """轮端外层平衡反馈，输出关节力矩需求，再折算成电流叠加到电调。
+    """轮端平衡**教师**：级联结构（外环俯仰指令 + 内环俯仰 PD + 力矩预算）。
 
-    符号约定（实测）：正轮力矩驱动车身朝 −X，前进（vx>0）需要负力矩。
+    输出的是**期望轮电流（A）**，与环境里"策略输出电流"在同一层，方便线性混合::
+
+        current = assist * teacher_current + (1 - assist) * policy_current
+
+    符号约定（MuJoCo 实测，见 spec.BalanceParams）：
+    正轮电流 → 车身加速度 −X、俯仰角增大。因此"想朝 +X 修正"要先向 +θ 倾，
+    外环两条支路都是**正号**。
     """
 
     params: BalanceParams = field(default_factory=BalanceParams)
@@ -96,43 +110,45 @@ class BalanceController:
     def reset(self) -> None:
         self.integral = 0.0
 
-    def torque(self, pitch: float, pitch_rate: float, body_vx: float,
-               command_vx: float, dt: float, station_error: float = 0.0,
-               command_active: bool = False) -> float:
-        """俯仰 PD + 速度 PI + 零指令时的站定位置环。
+    def current(self, pitch: float, pitch_rate: float, body_vx: float,
+                command_vx: float, dt: float, station_error: float = 0.0,
+                command_active: bool = False) -> float:
+        """返回教师期望电流（A）。
 
-        整条外环乘以 ``assist_scale``（辅助退火系数）。退到 0 时本函数输出恒为 0，
-        姿态与位置完全由策略通过关节+轮子学习得到 —— 不允许靠外部硬约束维持姿态。
-        符号与增益为实测标定值（见 :class:`BalanceParams`）。
+        ⚠️ **即使 assist_scale = 0 也照常计算**：此时它不参与实际控制（由
+        :class:`ActuatorBank` 的线性混合决定），但奖励里的 ``teacher_track``
+        仍然需要它作为"完整平衡律应该输出多少"的参考。若在这里按 assist 提前
+        返回 0，退火到 0 之后跟踪奖励就会把策略推向"输出 0"——而不是"自己把
+        平衡律做出来"。
         """
-        if self.params.assist_scale <= 1e-6:
-            self.integral = 0.0
-            return 0.0
         error_v = body_vx - command_vx
         self.integral = float(np.clip(
-            self.integral - error_v * dt,
+            self.integral + error_v * dt,
             -self.params.integral_limit, self.params.integral_limit,
         ))
-        torque = -self.params.pitch_kp * (pitch + self.params.pitch_kd * pitch_rate)
-        torque -= self.params.body_speed_kp * error_v
-        torque += self.params.body_speed_ki * self.integral
+        # 外环：把"速度/位置误差"翻译成一个**有界的俯仰指令**。
+        #
+        # 符号推导（静平衡，实测 τ_hold(θ) = −8.53·θ Nm）：
+        # 内环令 τ = kp(θ_ref − θ)，稳态要求 τ = τ_hold ⇒
+        #   θ = (kp·θ_ref + kv·error_v + kx·x) / (kp − 8.53)
+        # 想让 x>0 时车身后仰（θ<0，随后 v̇<0 往回走）就必须取**负号**：
+        #   θ_ref = −(kv·error_v + kx·x_error)
+        # 这与实测标定的加性形式 ``tau = -kp*θ - kv*vx - kx*x`` 完全同构。
+        theta_ref = self.params.speed_sign * (
+            self.params.body_speed_kp * error_v
+            + self.params.body_speed_ki * self.integral
+        ) / self.params.pitch_kp
         if not command_active and self.params.station_kp:
-            # 死区外才出力。**符号为实测标定：负增益**。
-            # 闭环实测（900 步，死区 5 cm）::
-            #     Kx = -50 → 漂移 8.1 cm    Kx = -18 → 9.9 cm
-            #     Kx =  +6 → 25 cm 并触发 station_limit
-            # 注意这与"锁死姿态下的开环测量"结论相反 —— 闭环下摆动力学主导，
-            # 一律以闭环实测为准。
-            boundary = float(np.copysign(
-                max(abs(station_error) - self.params.station_deadband, 0.0), station_error
-            ))
-            torque -= self.params.station_kp * boundary
-            torque -= self.params.station_kd * body_vx
-        torque *= self.params.assist_scale
-        if (self.params.overspeed_brake_kp and body_vx * command_vx > 0.0
-                and abs(body_vx) > abs(command_vx) + self.params.overspeed_margin):
-            torque += self.params.overspeed_brake_kp * error_v
-        return float(torque)
+            theta_ref += self.params.station_sign * self.params.station_kp * station_error
+            theta_ref += self.params.station_sign * self.params.station_kd * body_vx
+        theta_ref = float(np.clip(theta_ref, -self.params.theta_max, self.params.theta_max))
+
+        # 内环：俯仰 PD。微分增益 = pitch_kp * pitch_kd（有界，不会打饱和）。
+        torque = (self.params.pitch_kp * (theta_ref - pitch)
+                  - self.params.pitch_kp * self.params.pitch_kd * pitch_rate)
+        current = torque / WheelEscParams.torque_per_amp_joint
+        return float(np.clip(current, -self.params.teacher_current_limit,
+                             self.params.teacher_current_limit))
 
 
 @dataclass
@@ -146,6 +162,8 @@ class ActuatorBank:
 
     # 最近一步的诊断量
     diagnostics: dict = field(default_factory=dict, init=False)
+    # ★ 腿通道语义：[common, diff]（True）还是直接 4 关节（False，历史行为）
+    leg_differential: bool = True
 
     def reset(self) -> None:
         self.wheel.reset()
@@ -170,47 +188,59 @@ class ActuatorBank:
     ) -> dict:
         """返回 ``{"leg_ctrl": (4,), "wheel_ctrl": (2,), ...}`` 诊断字典。
 
-        关节指令 = **固定零位** + 动作偏置（不能写成“当前位姿 + 偏置”，否则
+        关节指令 = **固定中立位** + 动作偏置（不能写成“当前位姿 + 偏置”，否则
         action=0 时位置误差恒为 0，PD 退化成纯阻尼，腿会直接软掉）。
+        中立位是实测负载平衡位形（``RobotParams.stand_joint_pos``），不是 0。
         """
-        # 动作 6 维（对齐开源）：[0:2] 轮速目标，[2:6] 4 个腿关节位置偏置。
-        # 缩放全部来自 spec.ACTION_SPEC（官方 pos_action_scale = 0.35）。
-        q_target = (
-            state["nominal_joint_pos"]
-            + np.asarray(action[2:6], dtype=np.float64) * POS_ACTION_SCALE
-        )
+        # 动作 6 维：[0] common-mode 轮电流，[1] differential 轮电流，
+        # [2:6] 4 个腿关节位置偏置（**共模 / 差模**基，见下）。
+        #
+        # ★ 腿通道语义（第二轮腿长训练引入）：
+        #   a[2] = 左腿共模偏置，a[3] = 左腿差模偏置
+        #   a[4] = 右腿共模偏置，a[5] = 右腿差模偏置
+        #   下发：q2 = neutral2 + (common + diff)·scale
+        #         q4 = neutral4 + (common − diff)·scale
+        #   共模改腿的俯仰角（**不影响腿长**），差模改腿长
+        #   （实测 dL/d(q2−q4) ≈ −0.1237 m/rad）。
+        #   旧语义是 4 个通道直接对应 4 个关节，无法改变腿长 —— 保留
+        #   `leg_differential=False` 以复现历史行为。
+        action = np.asarray(action, dtype=np.float64)
+        common_l, diff_l = action[2], action[3]
+        common_r, diff_r = action[4], action[5]
+        if not self.leg_differential:
+            common_l = diff_l = action[2]
+            common_r = diff_r = action[3]
+        q_target = np.asarray(state["nominal_joint_pos"], dtype=np.float64).copy()
+        q_target[0] += common_l * POS_ACTION_SCALE + diff_l * LEG_DIFF_ACTION_SCALE
+        q_target[1] += common_l * POS_ACTION_SCALE - diff_l * LEG_DIFF_ACTION_SCALE
+        q_target[2] += common_r * POS_ACTION_SCALE + diff_r * LEG_DIFF_ACTION_SCALE
+        q_target[3] += common_r * POS_ACTION_SCALE - diff_r * LEG_DIFF_ACTION_SCALE
         qd_target = np.zeros(4, dtype=np.float64)
         leg_torque = self.joint.torque(q_target, qd_target, state["joint_pos"], state["joint_vel"])
 
-        wheel_target = self.decode_wheel_basis(
-            action[0], action[1], WHEEL_COMMON_SCALE, WHEEL_DIFF_SCALE,
+        # PPO 站立 checkpoint 的动作契约是受限轮电流（common / differential
+        # 两个基）。速度环 ``current()`` 保留给后续从零训练的速度目标课程；
+        # 不能在旧 checkpoint 上静默切换动作语义。
+        policy_current = self.decode_wheel_basis(
+            action[0], action[1],
+            self.wheel.params.policy_current_scale_a,
+            self.wheel.params.policy_current_scale_a,
         )
-        # 注意：**不**在零指令时屏蔽策略的轮速目标。
-        # 姿态与位置都必须由策略自己学，屏蔽会让策略失去唯一的控制手段。
-        esc_current = self.wheel.current(wheel_target, state["wheel_vel"], dt)
-
-        balance_torque = self.balance.torque(
-            state["pitch"], state["pitch_rate"], state["body_vx"],
-            state["command_vx"], dt,
-            station_error=state.get("station_error", 0.0),
-            command_active=state["command_active"],
-        )
-        balance_current = np.full(2, balance_torque / self.wheel.params.torque_per_amp_joint)
-
         total_current = np.clip(
-            esc_current + balance_current,
+            policy_current,
             -self.wheel.params.current_limit_a, self.wheel.params.current_limit_a,
         )
         wheel_torque = self.wheel.torque_from_current(total_current)
 
         self.diagnostics = {
-            "wheel_target_left": float(wheel_target[0]),
-            "wheel_target_right": float(wheel_target[1]),
+            "wheel_target_left": float(policy_current[0]),
+            "wheel_target_right": float(policy_current[1]),
             "wheel_current_left": float(total_current[0]),
             "wheel_current_right": float(total_current[1]),
             "wheel_torque_left": float(wheel_torque[0]),
             "wheel_torque_right": float(wheel_torque[1]),
-            "balance_torque": float(balance_torque),
+            "balance_torque": 0.0,
+            "balance_current": np.zeros(2, dtype=np.float64),
             "leg_torque_abs_mean": float(np.abs(leg_torque).mean()),
         }
         return {
@@ -219,7 +249,8 @@ class ActuatorBank:
             "leg_torque": leg_torque,
             "wheel_torque": wheel_torque,
             "wheel_current": total_current,
-            "wheel_target": wheel_target,
+            "wheel_target": policy_current,
+            "balance_current": np.zeros(2, dtype=np.float64),
         }
 
     def wheel_target_hold(self, state: dict) -> np.ndarray:
