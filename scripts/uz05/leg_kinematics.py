@@ -65,7 +65,7 @@ def forward(thetas: np.ndarray) -> dict:
             "P4": p_p4, "Q3": p_q3, "Q6": p_q6, "Q2": p_q2}
 
 
-def residuals(thetas: np.ndarray, x_target: float, L_target: float) -> np.ndarray:
+def kinematic_equations(thetas: np.ndarray, x_target: float, L_target: float) -> np.ndarray:
     pts = forward(thetas)
     return np.concatenate([
         pts["Q3"] - pts["P4"],
@@ -83,7 +83,7 @@ def inverse_kinematics(x_target: float, L_target: float,
     solutions = []
     for s in seeds:
         try:
-            res = least_squares(residuals, s, args=(x_target, L_target),
+            res = least_squares(kinematic_equations, s, args=(x_target, L_target),
                                 method="lm", xtol=1e-12, ftol=1e-12, gtol=1e-12,
                                 max_nfev=4000)
         except Exception:
@@ -117,8 +117,7 @@ def nominal_angles(env) -> np.ndarray:
 if __name__ == "__main__":
     from uz05.env import UZ05Env
 
-    env = UZ05Env(stage="stand", stand_level=2, assist_scale=0.0, seed=0,
-                  init_scale=0.0)
+    env = UZ05Env(stage="stand", stand_level=2, seed=0, init_scale=0.0)
     env.params.domain_randomization.enabled = False
     env.reset(seed=0)
     th = nominal_angles(env)

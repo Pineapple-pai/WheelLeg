@@ -1,115 +1,24 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>UZ-05 腿+轮协同平衡回放</title>
-  <link rel="stylesheet" href="/styles.css">
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>UZ-05 PPO 目标回放</title><link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">UZ</span><div><strong>UZ-05</strong><span>腿 + 轮协同平衡回放</span></div></div>
-    <div class="run-meta"><span class="dot" id="statusDot"></span><span id="statusText">READY</span><code id="checkpointName">loading</code></div>
-    <div class="top-actions"><button class="icon-button" id="fitButton" title="Fit camera">FIT</button><button class="icon-button" id="fullscreenButton" title="Fullscreen">[]</button></div>
-  </header>
-
-  <main class="layout">
-    <section class="viewport-panel">
-      <div class="viewport-toolbar">
-        <div class="toolbar-group"><span class="eyebrow">SIMULATION</span><span class="badge" id="levelBadge">S2 EVALUATION</span><span class="badge quiet" id="modeBadge">COORD CTRL</span><span class="badge quiet">ASSIST 0</span></div>
-        <div class="toolbar-group"><span class="readout">EP <b id="episodeValue">0</b></span><span class="readout">STEP <b id="stepValue">0</b></span><span class="readout">TIME <b id="timeValue">0.00s</b></span></div>
-      </div>
-      <div class="viewport" id="viewport">
-        <img id="frame" alt="MuJoCo robot replay frame">
-        <div class="viewport-overlay"><span class="live-pill"><span class="live-dot"></span>LIVE STATE</span><span id="frameHint">PAUSED</span></div>
-        <div class="crosshair"></div>
-      </div>
-      <div class="timeline-wrap"><div class="timeline-label"><span>DRIFT (绿) / PITCH (橙) TRACE</span><span id="timelineValue">0.00 cm</span></div><canvas id="timeline" height="74"></canvas></div>
+  <main>
+    <header><div><span class="eyebrow">UZ-05 / MUJOCO</span><h1>PPO 直接目标回放</h1></div><span id="mode" class="badge">PPO DIRECT</span></header>
+    <section class="viewport"><img id="frame" alt="MuJoCo frame"></section>
+    <section class="toolbar">
+      <button id="play">▶ 播放</button><button id="step">单步</button><button id="reset">重置</button>
+      <label>速度 <input id="speed" type="range" min="0.1" max="4" step="0.1" value="1"></label>
+      <label>Seed <input id="seed" type="number" value="2000"></label>
     </section>
-
-    <aside class="sidebar">
-      <section class="side-section simulation-section">
-        <div class="section-heading"><span>Simulation</span><span class="section-state" id="simState">READY</span></div>
-        <div class="control-row primary-controls"><button id="playButton" class="primary">&#9654; Play</button><button id="stepButton">&#9654;| Step</button><button id="resetButton">&#8635; Reset</button></div>
-        <div class="field-row"><label for="speed">Playback</label><span class="value-chip" id="speedValue">1.00x</span></div>
-        <input id="speed" type="range" min="0.05" max="8" step="0.05" value="1">
-        <div class="range-labels"><span>0.05x</span><span>8x</span></div>
-        <div class="field-row"><label>Measured RTF</label><span class="value-chip" id="rtfValue">0.00x</span></div>
-        <div class="field-row seed-row"><label for="seed">Seed</label><input id="seed" type="number" value="2000" step="1"><button id="newSeedButton" title="Randomize seed">RAND</button></div>
-      </section>
-
-      <section class="side-section command-section">
-        <div class="section-heading"><span>腿长控制</span><span class="section-state" id="legRangeLabel">0.150 – 0.270 m</span></div>
-        <div class="field-row"><label for="legLength">腿长目标（绝对值）</label><span class="value-chip" id="legLengthValue">0.184 m</span></div>
-        <input id="legLength" type="range" min="0.150" max="0.270" step="0.001" value="0.184">
-        <div class="range-labels"><span id="legMinLabel">0.150 m</span><span id="legMaxLabel">0.270 m</span></div>
-        <div class="metric-grid compact">
-          <div class="metric"><span>实测腿长</span><strong id="legMeasValue">0.000 m</strong></div>
-          <div class="metric"><span>环内误差</span><strong id="legErrValue">0.0 mm</strong></div>
-          <div class="metric"><span>用户请求误差</span><strong id="legRequestedErrValue">0.0 mm</strong></div>
-          <div class="metric"><span>环内目标</span><strong id="legControlValue">0.000 m</strong></div>
-        </div>
-        <div class="quick-leg">
-          <button data-leg="0.150">0.150</button><button data-leg="0.184">0.184</button>
-          <button data-leg="0.195">0.195</button><button data-leg="0.210">0.210</button>
-          <button data-leg="0.225">0.225</button><button data-leg="0.240">0.240</button>
-          <button data-leg="0.270">0.270</button>
-        </div>
-        <div class="camera-hint">拖动滑块 → 只保留最新目标；环内误差是可控跟踪误差，用户请求误差包含机构带宽造成的滞后。</div>
-        <div class="field-row"><label for="wheelSpeed">Wheel speed</label><span class="value-chip" id="wheelSpeedValue">0.0 rad/s</span></div>
-        <input id="wheelSpeed" type="range" min="-8" max="8" step="0.1" value="0">
-        <div class="range-labels"><span>-8</span><span>+8 rad/s</span></div>
-        <div class="field-row"><label for="yawRate">Steering / yaw</label><span class="value-chip" id="yawRateValue">0.00 rad/s</span></div>
-        <input id="yawRate" type="range" min="-3" max="3" step="0.05" value="0">
-        <div class="range-labels"><span>left</span><span>right</span></div>
-        <button id="motionResetButton" class="wide-button">Reset command</button>
-      </section>
-
-      <section class="side-section">
-        <div class="section-heading"><span>Camera</span><button class="text-button" id="followButton">FOLLOW ON</button></div>
-        <div class="segmented"><button data-preset="three-quarter" class="active">3/4</button><button data-preset="side">SIDE</button><button data-preset="front">FRONT</button><button data-preset="top">TOP</button></div>
-        <div class="camera-hint">Drag the viewport to orbit. Wheel to zoom.</div>
-      </section>
-
-      <section class="side-section metrics-section">
-        <div class="section-heading"><span>State</span><span class="status-text" id="terminationValue">ready</span></div>
-        <div class="metric-grid">
-          <div class="metric"><span>DRIFT</span><strong id="driftValue">0.00 cm</strong></div>
-          <div class="metric"><span>PEAK DRIFT</span><strong id="peakDriftValue">0.00 cm</strong></div>
-          <div class="metric"><span>TAIL AVG</span><strong id="tailValue">0.00 cm</strong></div>
-          <div class="metric"><span>PITCH</span><strong id="pitchValue">0.00 deg</strong></div>
-          <div class="metric"><span>HEIGHT</span><strong id="heightValue">0.000 m</strong></div>
-          <div class="metric"><span>BODY VX</span><strong id="vxValue">0.000 m/s</strong></div>
-          <div class="metric"><span>REWARD</span><strong id="rewardValue">0.000</strong></div>
-        </div>
-      </section>
-
-      <section class="side-section metrics-section coord-section">
-        <div class="section-heading"><span>腿 + 轮协同分工</span><span class="status-text" id="coordMixValue">mix 1.00</span></div>
-        <div class="metric-grid">
-          <div class="metric"><span>PITCH RMS</span><strong id="pitchRmsValue">0.000 deg</strong></div>
-          <div class="metric"><span>PITCH 峰峰值</span><strong id="pitchPeakValue">0.000 deg</strong></div>
-          <div class="metric"><span>PITCH 速率 RMS</span><strong id="pitchRateValue">0.0000 rad/s</strong></div>
-          <div class="metric"><span>漂移峰值</span><strong id="driftPeakValue">0.00 cm</strong></div>
-          <div class="metric"><span>轮电流 RMS</span><strong id="currentRmsValue">0.00 A</strong></div>
-          <div class="metric"><span>电流抖动 dI</span><strong id="currentDeltaValue">0.000 A</strong></div>
-        </div>
-        <div class="signal-row"><span>腿长目标</span><div class="bar orange"><i id="legCmdBar"></i></div><b id="legCmdValue">0.000 m</b></div>
-        <div class="signal-row"><span>腿偏置 (低频)</span><div class="bar orange"><i id="legOffsetBar"></i></div><b id="legOffsetValue">0.000 rad</b></div>
-        <div class="signal-row"><span>轮电流 (高频)</span><div class="bar"><i id="coordCurrentBar"></i></div><b id="coordCurrentValue">0.00 A</b></div>
-        <div class="camera-hint">腿：低频姿态 / 位置 / 支撑 · 轮：高频 pitch / 速度</div>
-      </section>
-
-      <section class="side-section signal-section">
-        <div class="section-heading"><span>Actuator signals</span><span class="unit">A / m</span></div>
-        <div class="signal-row"><span>Wheel L</span><div class="bar"><i id="wheelLBar"></i></div><b id="wheelLValue">0.00 A</b></div>
-        <div class="signal-row"><span>Wheel R</span><div class="bar"><i id="wheelRBar"></i></div><b id="wheelRValue">0.00 A</b></div>
-        <div class="signal-row"><span>Leg L</span><div class="bar orange"><i id="legLBar"></i></div><b id="legLValue">0.000 m</b></div>
-        <div class="signal-row"><span>Leg R</span><div class="bar orange"><i id="legRBar"></i></div><b id="legRValue">0.000 m</b></div>
-      </section>
-    </aside>
-  </main>
-  <footer><span>MuJoCo · 腿 + 轮协同动态平衡控制器</span><span id="connectionText">Connecting...</span></footer>
-  <script src="/app.js"></script>
-</body>
-</html>
+    <section class="grid">
+      <article><h2>状态</h2><div class="metrics"><span>步数 <b id="stepValue">0</b></span><span>奖励 <b id="rewardValue">0</b></span><span>终止 <b id="termination">ready</b></span><span>高度 <b id="height">0</b></span><span>俯仰 <b id="pitch">0</b></span><span>前向速度 <b id="vx">0</b></span></div></article>
+      <article><h2>PPO 动作目标</h2><div class="metrics"><span>左轮目标 <b id="wheelL">0</b></span><span>右轮目标 <b id="wheelR">0</b></span><span>左轮电流 <b id="currentL">0</b></span><span>右轮电流 <b id="currentR">0</b></span><span>左腿长 <b id="legL">0</b></span><span>右腿长 <b id="legR">0</b></span></div></article>
+      <article><h2>手动轮速目标</h2><label>共模轮速 <input id="wheelSpeed" type="range" min="-8" max="8" step="0.1" value="0"><b id="wheelSpeedValue">0</b> rad/s</label><label>偏航目标 <input id="yawRate" type="range" min="-3" max="3" step="0.1" value="0"><b id="yawValue">0</b> rad/s</label></article>
+      <article><h2>腿部测量</h2><div>目标 <b id="legTarget">0</b> m</div><div>误差 <b id="legError">0</b> mm</div></article>
+    </section>
+    <footer>动作顺序：左轮速、右轮速、四个腿关节绝对位置目标；腿由 PD 执行，轮由速度环执行。</footer>
+  </main><script src="/app.js"></script>
+</body></html>

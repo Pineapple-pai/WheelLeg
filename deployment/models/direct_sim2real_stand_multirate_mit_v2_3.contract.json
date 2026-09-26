@@ -1,0 +1,26 @@
+{
+  "contract_version": "uz05_direct_ppo_mit_v2",
+  "source_checkpoint": "/home/p/下载/WheelLeg/checkpoints/direct_sim2real_stand_multirate_mit_v2_3/checkpoint",
+  "runtime": "onnxruntime_cpu",
+  "input_name": "actor_observation",
+  "input_shape": [
+    "batch",
+    38
+  ],
+  "output_name": "action",
+  "output_shape": [
+    "batch",
+    6
+  ],
+  "policy_rate_hz": 125,
+  "motor_control_rate_hz": 500,
+  "motor_ticks_per_policy": 4,
+  "deterministic": true,
+  "deployment_accepted": false,
+  "deployment_acceptance_note": "Export parity only; pass multirate simulation and hardware bring-up separately",
+  "output_clipped": [
+    -1.0,
+    1.0
+  ],
+  "parity_max_abs": 7.450580596923828e-08
+}

@@ -1,0 +1,67 @@
+{
+  "contract_version": "uz05_direct_ppo_mit_v4_forward_positive_wheels",
+  "validated_on_hardware": false,
+  "timing": {
+    "motor_control_rate_hz": 500,
+    "policy_rate_hz": 125,
+    "motor_ticks_per_policy": 4,
+    "policy_timeout_motor_ticks": 8,
+    "policy_timeout_ms": 16,
+    "policy_overrun_behavior": "hold_last_target_then_safe_stop"
+  },
+  "policy": {
+    "runtime": "onnxruntime_cpu",
+    "actor_observation_dim": 38,
+    "action_dim": 6,
+    "action_layout": [
+      "left_wheel_velocity_target",
+      "right_wheel_velocity_target",
+      "left_leg_motor_0_absolute_position",
+      "left_leg_motor_1_absolute_position",
+      "right_leg_motor_0_absolute_position",
+      "right_leg_motor_1_absolute_position"
+    ],
+    "wheel_action_frame": "body_forward_positive",
+    "wheel_action_to_sim_joint_velocity_sign": -1,
+    "wheel_velocity_scale_rad_s": 8.0,
+    "leg_absolute_position_scale_rad": 1.2
+  },
+  "leg_dm_j8009p": {
+    "supply_voltage_v": 24,
+    "mode": "MIT",
+    "v_des_rad_s": 0.0,
+    "kp": 100.0,
+    "kd": 4.0,
+    "t_ff_nm": 0.0,
+    "p_range_rad": [-12.5, 12.5],
+    "v_range_rad_s": [-30.0, 30.0],
+    "kp_range": [0.0, 500.0],
+    "kd_range": [0.0, 5.0],
+    "t_range_nm": [-20.0, 20.0],
+    "simulation_torque_limit_nm": 20.0,
+    "hardware_bringup_torque_limit_nm": "REQUIRED_AFTER_BENCH_TEST",
+    "can_ids": "REQUIRED_AFTER_BENCH_TEST",
+    "joint_zero_offsets_rad": "REQUIRED_AFTER_BENCH_TEST",
+    "joint_directions": "REQUIRED_AFTER_BENCH_TEST"
+  },
+  "wheel_c620": {
+    "supply_voltage_v": 24,
+    "control": "wheel_velocity_PI_to_torque_current",
+    "command_full_scale": 16384,
+    "current_full_scale_a": 20.0,
+    "simulation_current_limit_a": 10.0,
+    "hardware_bringup_current_limit_a": "REQUIRED_AFTER_BENCH_TEST",
+    "speed_kp_a_per_rad_s": 0.081,
+    "speed_ki_a_per_rad_s2": 0.0,
+    "gear_ratio": 15.764705882352942,
+    "gear_ratio_status": "UNVERIFIED",
+    "wheel_radius_m": 0.055,
+    "wheel_directions": "REQUIRED_AFTER_BENCH_TEST",
+    "can_ids": "REQUIRED_AFTER_BENCH_TEST"
+  },
+  "can": {
+    "bitrate_bps": 1000000,
+    "recommended_topology": "DM motors and C620 ESCs on separate CAN buses",
+    "actual_topology": "REQUIRED_AFTER_CONTROL_BOARD_CONFIRMATION"
+  }
+}
