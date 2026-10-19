@@ -1,0 +1,208 @@
+{
+  "task_id": "pure_ppo_stand_v1",
+  "action_protocol": "stand_offset_v1",
+  "action_order": [
+    "wheel_left",
+    "wheel_right",
+    "leg_left_1",
+    "leg_left_2",
+    "leg_right_1",
+    "leg_right_2"
+  ],
+  "action_dim": 6,
+  "action_low": [
+    -1.0,
+    -1.0,
+    -1.0,
+    -1.0,
+    -1.0,
+    -1.0
+  ],
+  "action_high": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+  ],
+  "wheel_sign": [
+    1.0,
+    1.0
+  ],
+  "wheel_speed_scale_rad_s": 8.0,
+  "leg_position_scale_rad": 0.5,
+  "joint_position_limit_rad": 1.2,
+  "q_ref_rad": [
+    -0.1945,
+    0.19129,
+    -0.19141,
+    0.19057
+  ],
+  "reset_height_m": 0.23825,
+  "nominal_leg_length_m": 0.18413,
+  "policy_dt_s": 0.008,
+  "motor_dt_s": 0.002,
+  "motor_ticks_per_policy_step": 4,
+  "policy_rate_hz": 125,
+  "motor_rate_hz": 500,
+  "episode_steps": 1000,
+  "initial_pitch_rad": [
+    -0.05235987755982989,
+    0.05235987755982989
+  ],
+  "initial_pitch_rate_rad_s": [
+    -0.1,
+    0.1
+  ],
+  "initial_roll_yaw_rad": [
+    0.0,
+    0.0
+  ],
+  "domain_randomization": false,
+  "observation_noise": false,
+  "observation_delay_steps": 0,
+  "action_delay_steps": 0,
+  "pushes_during_training": false,
+  "actor_observation_dim": 38,
+  "critic_observation_dim": 56,
+  "observation_dim": 94,
+  "reward_timing": "one reward per 8ms policy step; not multiplied by dt",
+  "reward": {
+    "upright": 1.0,
+    "alive": 0.1,
+    "pitch_rate": 0.05,
+    "horizontal_velocity": 0.05,
+    "position_drift": 0.1,
+    "height_error": 0.05,
+    "leg_length_error": 0.05,
+    "action_rate": 0.005,
+    "effort": 0.005,
+    "termination": 5.0,
+    "upright_sigma_rad": 0.1,
+    "pitch_rate_scale_rad_s": 0.1,
+    "horizontal_velocity_scale_m_s": 0.1,
+    "position_drift_scale_m": 0.1,
+    "height_error_scale_m": 0.05,
+    "leg_length_error_scale_m": 0.05
+  },
+  "termination": {
+    "abs_roll_or_pitch_rad": 0.4363323129985824,
+    "base_height_m": [
+      0.12,
+      0.45
+    ],
+    "planar_drift_m": 0.4,
+    "body_contact": "any detected chassis/gimbal contact",
+    "episode_cap_policy_steps": 1000
+  },
+  "ppo": {
+    "actor_critic_arch": {
+      "pi": [
+        256,
+        128,
+        64
+      ],
+      "vf": [
+        256,
+        128,
+        64
+      ]
+    },
+    "activation": "ELU",
+    "optimizer": "Adam, fresh state",
+    "learning_rate": 0.0001,
+    "learning_rate_schedule": "constant",
+    "n_envs": 8,
+    "n_steps_per_env_per_update": 512,
+    "batch_size": 512,
+    "n_epochs": 5,
+    "gamma": 0.99,
+    "gae_lambda": 0.95,
+    "clip_range": 0.2,
+    "target_kl": 0.015,
+    "ent_coef": 0.0,
+    "initial_log_std": -1.5,
+    "max_updates_per_seed": 800,
+    "training_seeds": [
+      0,
+      1,
+      2
+    ],
+    "checkpoint_initialization": null,
+    "initialization": "fresh random initialization; no checkpoint loaded",
+    "validation_seeds": [
+      10000,
+      10001,
+      10002,
+      10003,
+      10004,
+      10005,
+      10006,
+      10007,
+      10008,
+      10009,
+      10010,
+      10011,
+      10012,
+      10013,
+      10014,
+      10015,
+      10016,
+      10017,
+      10018,
+      10019,
+      10020,
+      10021,
+      10022,
+      10023,
+      10024,
+      10025,
+      10026,
+      10027,
+      10028,
+      10029,
+      10030,
+      10031,
+      10032,
+      10033,
+      10034,
+      10035,
+      10036,
+      10037,
+      10038,
+      10039,
+      10040,
+      10041,
+      10042,
+      10043,
+      10044,
+      10045,
+      10046,
+      10047,
+      10048,
+      10049
+    ],
+    "independent_test_seed_bases": {
+      "0": 20000,
+      "1": 21000,
+      "2": 22000
+    }
+  },
+  "runtime_lock": {
+    "python": "3.10.20 (main, Jun 11 2026, 15:17:37) [GCC 14.3.0]",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "mujoco": "3.2.3",
+    "stable-baselines3": "2.3.2",
+    "torch": "2.2.2+cu118",
+    "numpy": "1.26.4",
+    "gymnasium": "0.29.0",
+    "onnx": "1.16.2",
+    "onnxruntime": "1.19.2",
+    "cuda_runtime_path": "Isaac Sim 4.0.0 bundled CUDA 11.8 libraries; scoped LD_LIBRARY_PATH during runs",
+    "gpu": "NVIDIA GeForce RTX 4060 Laptop GPU"
+  },
+  "model_xml_sha256": "22fc08a5f900ffc20d977c29851618fb0ca03c1d6b01dd2da0f32209ba505c54",
+  "source_fingerprint_sha256": "77531bd427e59fff9dd7f53ac4bd1f4c992d86cff8fe82a9311b4da8eadb7799",
+  "baseline_commit": "ff19e52cf6dd1b309adb2c07e575ddd2be4d870e"
+}
