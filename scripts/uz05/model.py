@@ -197,7 +197,13 @@ class UZ05Model:
 
     @property
     def base_ang_vel_world(self) -> np.ndarray:
-        return self.data.qvel[3:6]
+        """World-frame angular velocity of the free-joint chassis.
+
+        MuJoCo free-joint qvel[3:6] stores rotational velocity in the
+        body-local frame. Other callers treat this property as world-frame
+        and rotate it back to body-frame, so convert here exactly once.
+        """
+        return self.rotation_matrix() @ np.asarray(self.data.qvel[3:6], dtype=np.float64)
 
     def rotation_matrix(self) -> np.ndarray:
         """机体系 → 世界系的旋转矩阵。"""
