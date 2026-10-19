@@ -38,7 +38,6 @@ MODE_NAMES = ("normal", "airborne", "stair", "recover", "jump")
 _BLOCK_ORDER = tuple(name for name, _ in OBS_BLOCKS)
 _BLOCK_WIDTH = {name: width for name, width in OBS_BLOCKS}
 _ACTOR_BLOCK_NAMES = frozenset(name for name, _ in ACTOR_OBS_BLOCKS)
-_NOISE_VEC = observation_noise_vector(EnvParams().noise)
 
 
 class UZ05Env(gym.Env):
@@ -94,6 +93,9 @@ class UZ05Env(gym.Env):
         self.episode_steps_override = None
         self.set_episode_steps(episode_steps_override)
         self.params = params or EnvParams()
+        # Observation noise must follow this environment's configuration,
+        # not the import-time defaults shared by every environment.
+        self._noise_vec = observation_noise_vector(self.params.noise)
         self.rng = np.random.default_rng(seed)
         self.deployment_mode = bool(deployment_mode)
         self.tilt_hold_steps = (
@@ -562,7 +564,7 @@ class UZ05Env(gym.Env):
         if clip > 0.0:
             np.clip(frame, -clip, clip, out=frame)
         noise_vec = np.concatenate([
-            np.full(_BLOCK_WIDTH[name], _NOISE_VEC.get(name, 0.0))
+            np.full(_BLOCK_WIDTH[name], self._noise_vec.get(name, 0.0))
             for name in _BLOCK_ORDER if name in _ACTOR_BLOCK_NAMES
         ])
         if np.any(noise_vec):
