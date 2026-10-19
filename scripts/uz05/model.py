@@ -179,7 +179,15 @@ class UZ05Model:
 
     @property
     def base_ang_vel_world(self) -> np.ndarray:
-        return self.data.qvel[3:6]
+        """Angular velocity expressed in world coordinates.
+
+        MuJoCo stores the rotational part of a free-joint ``qvel`` in the
+        free body's local frame. Keep this property's world-frame contract
+        explicit because callers may pass its result through ``body_frame``.
+        """
+        world = np.empty(3, dtype=np.float64)
+        mujoco.mju_rotVecQuat(world, self.data.qvel[3:6], self.data.qpos[3:7])
+        return world
 
     def rotation_matrix(self) -> np.ndarray:
         """机体系 → 世界系的旋转矩阵。"""

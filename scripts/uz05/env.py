@@ -274,7 +274,8 @@ class UZ05Env(gym.Env):
         hist = self._dof_vel_hist
         if len(hist) >= 2:
             span = (len(hist) - 1) * self.params.control_dt
-            dof_acc = (hist[0] - hist[-1]) / span
+            # ``hist[0]`` is oldest and ``hist[-1]`` is newest.
+            dof_acc = (hist[-1] - hist[0]) / span
         else:
             dof_acc = np.zeros(6, dtype=np.float64)
         # 最近一次下发的 6 个主动关节力矩（腿 4 + 轮 2），官方特权观测项
@@ -369,7 +370,8 @@ class UZ05Env(gym.Env):
         quat = self.sim.base_quat
         rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
         rpy = rot.as_euler("xyz")
-        pitch, pitch_rate = float(rpy[1]), float(self.sim.base_ang_vel_world[1])
+        pitch = float(rpy[1])
+        pitch_rate = float(self.sim.body_frame(self.sim.base_ang_vel_world)[1])
         body_vx = float(self.sim.body_frame(self.sim.base_lin_vel_world)[0])
         station_error = float(self.sim.data.qpos[0] - self.nominal_xy[0])
 
