@@ -1,96 +1,96 @@
-# WheelLeg · UZ-05 轮腿机器人强化学习
+# WheelLeg · UZ-05 MuJoCo 训练
 
-UZ-05 两轮平衡轮腿机器人的训练项目。仿真用 **MuJoCo**（`diagnostics/uz05.xml`），
-算法用 **Stable-Baselines3 PPO**，跑在 conda 环境 `sim` 里。
+当前主线是 MuJoCo 中的 UZ-05 两轮轮腿机器人，训练入口为
+[`scripts/train_uz05.py`](scripts/train_uz05.py)。环境、策略接口、奖励和执行器分别位于
+`scripts/uz05/`。Isaac Sim 旧实现已从当前版本移除。
 
-> 历史说明：仓库曾包含一套基于 Isaac Sim / OmniDrones 的旧轮腿实现
-> （`omni_drones/`、`cfg/`、`tools/`、`setup.py`），已于 2026-09 移除，只保留 MuJoCo 版。
-> 需要找回旧代码：`git checkout HEAD -- omni_drones cfg tools setup.py`
-> （`_deps/`、`conda_setup/` 未纳入 git，备份在 `/home/p/WheelLeg_isaac_backup_20260917/`）。
+## 开始训练
 
-## 快速开始
+训练依赖安装在本机 Conda 环境 `sim` 中。站立训练只用 PPO 输出动作，没有手写平衡外环、残差策略、教师策略或辅助退火。站立 S0 示例：
 
 ```bash
 cd /home/p/下载/WheelLeg
-
-# 站立三级课程（辅助 1.0→0.6 → 0.6→0.2 → 0.2→0.0，逐级继承，最后一级验收 ±5cm）
-NUM_ENVS=8 TAG=v1 bash scripts/train_uz05_all.sh stand \
-  > logs/train_stand_v1_$(date +%Y%m%d_%H%M%S).log 2>&1 &
-
-tail -35 logs/train_stand_v1_*.log     # 每行一个量
-pkill -f train_uz0[5]                  # 停止
+mkdir -p logs
+conda run --no-capture-output -n sim python -u scripts/train_uz05.py \
+  --stage stand --stand-level 0 \
+  --updates 800 --rollout-steps 256 --batch-size 512 \
+  --num-envs 8 --vec-env subproc --version stand_s0_v4 \
+  > "logs/stand_s0_v4_$(date +%Y%m%d_%H%M%S).log" 2>&1
 ```
 
-后续阶段（自动继承上一阶段 checkpoint，无需任何迁移）：
+S0 学稳后逐级训练 S1、S2，并将上一级 PPO checkpoint 传给 `--checkpoint`：
 
 ```bash
-TAG=v1 bash scripts/train_uz05_all.sh low_speed   # 单阶段
-TAG=v1 bash scripts/train_uz05_all.sh             # 全部 9 个阶段
+conda run --no-capture-output -n sim python -u scripts/train_uz05.py \
+  --stage stand --stand-level 1 --updates 800 --rollout-steps 256 \
+  --batch-size 512 --num-envs 8 --vec-env subproc \
+  --checkpoint checkpoints/stand_s0_v4/checkpoint --version stand_s1_v4
+
+conda run --no-capture-output -n sim python -u scripts/train_uz05.py \
+  --stage stand --stand-level 2 --updates 800 --rollout-steps 256 \
+  --batch-size 512 --num-envs 8 --vec-env subproc \
+  --checkpoint checkpoints/stand_s1_v4/checkpoint --version stand_s2_v4
 ```
 
-## 目录结构
+每个版本的策略、VecNormalize 统计量和接口契约都保存在 `checkpoints/<version>/`，TensorBoard 数据保存在 `runs/<version>/`。倾倒判定对正、负俯仰使用相同绝对角度边界，并给 40 个控制帧（320 ms）恢复时间；S2 的倾角边界为 11.5°。训练日志仍要求最近 50 个完整 episode 存活率达到 95%、最大漂移不超过 5 cm、偏航不超过 5°、三轴角速度 RMS 不超过 0.20 rad/s，且峰值倾角不越过当前课程边界，才显示 `accept_stand: 1`。当前契约为 `uz05_iface_v5`，除观测/动作接口外还校验执行器参数；v4 及更早 checkpoint 不兼容。
 
-```
+## 已训练站立 checkpoint
+
+历史 checkpoint [`checkpoints/stand_nominal_v9/`](checkpoints/stand_nominal_v9/) 使用旧轮速环参数，满动作时仅输出 0.405 A，不能作为当前站立策略。当前回放候选为 [`stand_negative_rate_refine_v1/checkpoint.zip`](checkpoints/stand_negative_rate_refine_v1/checkpoint.zip)，使用 v5 契约。名义动力学、正负 ±0.08 rad 初态的 50 回合压力回放中，45 回合跑满 1000 步；其余 5 回合只因站位略超 5 cm（5.01–5.04 cm）终止，峰值倾角最高 10.06°、偏航峰值低于 5°。默认网页种子 91000 可跑满 1000 步，最大站位偏移 0.98 cm、峰值俯仰 2.86°。这版仍未满足 95% 全部验收条件，压力回放中角速度 RMS 的回合最大值为 0.325 rad/s，高于 0.20 rad/s 验收值。
+
+## 当前接口
+
+| 接口 | 维度 | 内容 |
+|---|---:|---|
+| 策略 actor 观测 | 38 | 当前单帧观测，含相对初始航向误差；无历史帧堆叠 |
+| critic 专属特权观测 | 56 | 精确线速度/位移、腿长、接触、地形、力矩和域参数 |
+| PPO 环境观测总计 | 94 | 当前 actor 观测 + 单帧 critic 特权观测 |
+| 动作 | 6 | 共模轮速 1、差模轮速 1、腿关节位置偏置 4 |
+
+训练中的策略只读取前 38 维；critic 读取全部 94 维。各阶段保持相同的张量尺寸。
+actor 不再接收仿真任务标签；速度、位移、高度和地形输入仍是带噪仿真传感器代理，详见
+[观测与任务适配审计](docs/observation_training_audit.md)。
+
+## 目录
+
+```text
 scripts/
-  train_uz05.py                 训练入口（PPO + 非对称 actor-critic + 辅助退火 + 日志）
-  train_uz05_all.sh             分阶段课程脚本（自动串阶段、自动继承）
+  train_uz05.py                 PPO 训练入口和 checkpoint 接口契约
   uz05/
-    spec.py                     ★ 单一事实来源：接口/奖励/执行器/课程/域随机化
-    model.py                    MJCF 加载、索引、接触、地形、域随机化写入
-    actuators.py                关节 PD + 轮速→电调→电流→力矩
-    env.py                      环境：观测、奖励、终止、课程
-  validate_uz05_deployment_data.py   实机实测数据校验（等电调/电机数据）
-diagnostics/uz05.xml            机器人 MJCF（含 29 个纯显示网格，加载时自动裁剪）
-model_source/uz05/              SolidWorks 模型源（腿 / 底盘 / 总装 / 修复版）
-calibration/                    平衡控制器标定原始数据
-docs/uz05_refactor.md           ★ 重构说明：接口、坐标系、执行器、对齐开源、资源上限
-checkpoints/<version>/          每次训练一个独立文件夹（策略 + 归一化统计 + 契约）
-runs/<version>/                 tensorboard
-logs/                           终端输出留存
+    spec.py                     观测、动作、奖励、课程、物理参数
+    policy.py                   非对称 actor-critic 网络
+    model.py                    MJCF 加载、索引、接触、地形和域随机化
+    actuators.py                PPO 轮速/关节位置目标的执行器模型
+    observations.py              命名观测块、缩放/噪声和维度校验（无历史堆叠）
+    env.py                      Gymnasium 环境编排、奖励和终止
+  validate_uz05_deployment_data.py  外部实测 YAML 的部署数据校验器
+diagnostics/uz05.xml            当前 MuJoCo MJCF（已同步用户提供的腿部惯性修正版）
+model_source/uz05/              SolidWorks 源装配及提取表格
+docs/                           接口、模型、部署及训练审计
+checkpoints/                    本机训练 checkpoint（生成目录）
+runs/                           TensorBoard 输出（生成目录）
+logs/                           本机运行日志
+artifacts/                      保留的实验日志和复现记录
+修改.md                         历史设计记录
 ```
 
-## 接口（所有阶段固定，因此 checkpoint 永久可继承）
+`UZ05_VISUAL=1` 可启用 MJCF 的显示网格；常规训练会裁掉非碰撞显示网格。显示网格
+需另行提供，目录由 `UZ05_MESH_DIR` 指定，默认查找 `model_source/uz05/mjcf_meshes/`。
+部署数据校验器也需要外部实测 YAML；当前仓库不含该 YAML 模板。
+完整能力课程配置在 `scripts/uz05/spec.py`，但仓库当前没有自动串联所有阶段的 shell 脚本。
 
-| | 维度 | 内容 |
-|---|---|---|
-| 观测 | **226** | actor 170（34 维/帧 × 历史 5 帧，实机全可测） + 特权 56（仅 critic） |
-| 动作 | **6** | 轮速共模 ×8.0、轮速差模 ×6.0、4 个腿关节位置偏置 ×0.35 |
-| 控制 | 120 Hz | 关节 = 位置+速度+PD；轮 = 速度目标 → 电调 → 电流 → 力矩 |
+## 训练与模型边界
 
-坐标系全部**机器人坐标系**（重力投影 / 机体角速度 / 机体前向速度），
-不使用任何世界系绝对量，与实机陀螺仪一致。
-
-## 训练阶段
-
-`stand → low_speed → high_speed → steering → rotation → airborne → stairs → jump → recovery`
-
-前 5 个阶段用**官方 StackForce 16 项奖励**（权重逐项照抄，可与开源曲线直接对比），
-后 4 个阶段追加自研塑形项。详见 [docs/uz05_refactor.md](docs/uz05_refactor.md) §7–§8。
-
-**验收（站立 S2，三者同时满足）**：`survive_rate ≥ 0.95` 且 `drift_tail_cm < 5` 且 `assist_scale = 0`
-（终端直接打印 `accept_5cm: 1`）。硬约束：**不允许锁死姿态来控制姿态**，
-平衡必须由策略协调关节与轮子实现，辅助控制器必须退火到 0。
-
-## 资源上限（别踩，之前把整机跑死过）
-
-- subproc 环境 = 每环境一个独立进程，`--num-envs` 默认 8，代码里自动夹到 `min(核数/2, 8)`
-- 线程数统一为 1（否则 8 进程 × 16 线程会抢满 16 核）
-- MJCF 里的高模显示网格在加载时被裁掉（单进程 2.0 GB → 37 MB），要渲染时设 `UZ05_VISUAL=1`
+- 课程顺序：`stand → low_speed → high_speed → steering → rotation → airborne → stairs → jump → recovery`。
+- 站立 S2 以纯 PPO 达到全程最大前后漂移 5 cm、相对初始航向 5°以内；训练从 S0 开始逐级收紧边界。
+- 前后平移、旋转、跳跃和台阶的输入已纳入 actor；侧向命令虽预留但当前课程不采样，轮式底盘也不具备
+  直接横移能力。高度/地形传感器代理、跳跃事件奖励和站立奖励仍有限制，不能仅凭张量维度固定就判定实机可部署。
+- 电机增益、机械限位、摩擦和随机化范围中仍有手册值或待实测占位。实机部署结论见
+  [模型与实物部署审计](docs/model_deployment_audit.md)。
 
 ## 文档
 
-- [重构说明与训练配置](docs/uz05_refactor.md) —— 接口、坐标系、执行器、开源对齐、资源上限
-- [模型与实物部署审计](docs/model_deployment_audit.md) —— 机械/驱动事实（Isaac 时期，路径已失效）
-- [修改建议书](修改.md) —— 待办与设计参考
-
-## 待补的实测数据
-
-`scripts/uz05/spec.py` 里这几处仍是手册值或占位值，等实测数据替换：
-
-| 参数 | 当前值 | 来源 |
-|---|---|---|
-| `JointActuatorParams.kp / kd` | 100 / 4 | 旧版验证值 |
-| `WheelEscParams.speed_kp_a_per_rad_s` | 0.081 | 由旧 C620 增益换算 |
-| `RobotParams.leg_length_min / max` | 0.150 / 0.340 | 占位 |
-| `RobotParams.hip_joint_limit` | 1.2 rad | 占位 |
-| `DomainRandomization.*` | 12 项区间 | 参考开源，需用实测误差替换 |
+- [观测与任务适配审计](docs/observation_training_audit.md)：逐项评估站立、平移、旋转、跳跃等任务。
+- [重构说明与训练配置](docs/uz05_refactor.md)：接口、坐标系、执行器、奖励和课程。
+- [模型与实物部署审计](docs/model_deployment_audit.md)：模型可信度和实机阻塞项。
+- [文档索引](docs/README.md)

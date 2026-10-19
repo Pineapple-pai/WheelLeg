@@ -17,7 +17,6 @@ import numpy as np
 
 from .spec import (
     ACTION_SPEC,
-    BalanceParams,
     JointActuatorParams,
     RobotParams,
     WheelEscParams,
@@ -83,73 +82,18 @@ class WheelEscController:
 
 
 @dataclass
-class BalanceController:
-    """轮端外层平衡反馈，输出关节力矩需求，再折算成电流叠加到电调。
-
-    符号约定（实测）：正轮力矩驱动车身朝 −X，前进（vx>0）需要负力矩。
-    """
-
-    params: BalanceParams = field(default_factory=BalanceParams)
-
-    integral: float = field(default=0.0, init=False)
-
-    def reset(self) -> None:
-        self.integral = 0.0
-
-    def torque(self, pitch: float, pitch_rate: float, body_vx: float,
-               command_vx: float, dt: float, station_error: float = 0.0,
-               command_active: bool = False) -> float:
-        """俯仰 PD + 速度 PI + 零指令时的站定位置环。
-
-        整条外环乘以 ``assist_scale``（辅助退火系数）。退到 0 时本函数输出恒为 0，
-        姿态与位置完全由策略通过关节+轮子学习得到 —— 不允许靠外部硬约束维持姿态。
-        符号与增益为实测标定值（见 :class:`BalanceParams`）。
-        """
-        if self.params.assist_scale <= 1e-6:
-            self.integral = 0.0
-            return 0.0
-        error_v = body_vx - command_vx
-        self.integral = float(np.clip(
-            self.integral - error_v * dt,
-            -self.params.integral_limit, self.params.integral_limit,
-        ))
-        torque = -self.params.pitch_kp * (pitch + self.params.pitch_kd * pitch_rate)
-        torque -= self.params.body_speed_kp * error_v
-        torque += self.params.body_speed_ki * self.integral
-        if not command_active and self.params.station_kp:
-            # 死区外才出力。**符号为实测标定：负增益**。
-            # 闭环实测（900 步，死区 5 cm）::
-            #     Kx = -50 → 漂移 8.1 cm    Kx = -18 → 9.9 cm
-            #     Kx =  +6 → 25 cm 并触发 station_limit
-            # 注意这与"锁死姿态下的开环测量"结论相反 —— 闭环下摆动力学主导，
-            # 一律以闭环实测为准。
-            boundary = float(np.copysign(
-                max(abs(station_error) - self.params.station_deadband, 0.0), station_error
-            ))
-            torque -= self.params.station_kp * boundary
-            torque -= self.params.station_kd * body_vx
-        torque *= self.params.assist_scale
-        if (self.params.overspeed_brake_kp and body_vx * command_vx > 0.0
-                and abs(body_vx) > abs(command_vx) + self.params.overspeed_margin):
-            torque += self.params.overspeed_brake_kp * error_v
-        return float(torque)
-
-
-@dataclass
 class ActuatorBank:
     """把策略动作翻译成 MuJoCo 的 ``data.ctrl``。"""
 
     robot: RobotParams = field(default_factory=RobotParams)
     joint: JointPDController = field(default_factory=JointPDController)
     wheel: WheelEscController = field(default_factory=WheelEscController)
-    balance: BalanceController = field(default_factory=BalanceController)
 
     # 最近一步的诊断量
     diagnostics: dict = field(default_factory=dict, init=False)
 
     def reset(self) -> None:
         self.wheel.reset()
-        self.balance.reset()
         self.diagnostics = {}
 
     # ------------------------------------------------------------------
@@ -189,16 +133,8 @@ class ActuatorBank:
         # 姿态与位置都必须由策略自己学，屏蔽会让策略失去唯一的控制手段。
         esc_current = self.wheel.current(wheel_target, state["wheel_vel"], dt)
 
-        balance_torque = self.balance.torque(
-            state["pitch"], state["pitch_rate"], state["body_vx"],
-            state["command_vx"], dt,
-            station_error=state.get("station_error", 0.0),
-            command_active=state["command_active"],
-        )
-        balance_current = np.full(2, balance_torque / self.wheel.params.torque_per_amp_joint)
-
         total_current = np.clip(
-            esc_current + balance_current,
+            esc_current,
             -self.wheel.params.current_limit_a, self.wheel.params.current_limit_a,
         )
         wheel_torque = self.wheel.torque_from_current(total_current)
@@ -210,7 +146,6 @@ class ActuatorBank:
             "wheel_current_right": float(total_current[1]),
             "wheel_torque_left": float(wheel_torque[0]),
             "wheel_torque_right": float(wheel_torque[1]),
-            "balance_torque": float(balance_torque),
             "leg_torque_abs_mean": float(np.abs(leg_torque).mean()),
         }
         return {

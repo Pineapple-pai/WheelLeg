@@ -88,8 +88,55 @@ def _build_xml(terrain: TerrainSpec, visual: bool = False) -> str:
 
     if not visual:
         _strip_visual_geoms(root)
+    else:
+        asset = root.find("asset")
+        missing = [] if asset is None else [
+            mesh.get("file") for mesh in asset.findall("mesh")
+            if mesh.get("file") and not (MESH_DIR / mesh.get("file")).is_file()
+        ]
+        if missing:
+            preview = ", ".join(missing[:3])
+            more = " …" if len(missing) > 3 else ""
+            raise FileNotFoundError(
+                f"UZ05 visual mesh assets are missing under {MESH_DIR}: {preview}{more}. "
+                "Set UZ05_MESH_DIR to the directory containing the MJCF mesh files."
+            )
+
+    # The source MJCF places its overview camera under the free-floating chassis.
+    # That is useful for an attached robot camera, but wrong for an evaluation
+    # replay: the camera follows pitch and makes the world appear to rotate while
+    # hiding the robot's actual attitude. Relocate it in the temporary visual
+    # model only; the source MJCF and all physics/training contracts stay intact.
+    if visual and os.environ.get("UZ05_REPLAY_CAMERA") == "side":
+        camera = None
+        for parent in root.iter():
+            for child in list(parent):
+                if child.tag == "camera" and child.get("name") == "overview":
+                    parent.remove(child)
+                    camera = child
+                    break
+            if camera is not None:
+                break
+        if camera is None:
+            camera = ET.Element("camera", name="overview")
+        camera.set("pos", "0 -1.55 0.78")
+        # Side-on to the pitch axis (+Y), with world Z kept vertical in frame.
+        camera.set("xyaxes", "1 0 0 0 0.295 0.955")
+        root.find("worldbody").append(camera)
 
     worldbody = root.find("worldbody")
+    if visual and os.environ.get("UZ05_REPLAY_CAMERA") == "side":
+        # World-fixed references make the fixed camera's pitch comparison obvious.
+        ET.SubElement(
+            worldbody, "geom", name="replay_floor_reference", type="box",
+            pos="0 0 0.004", size="1.5 0.006 0.004",
+            rgba="0.20 0.52 0.55 1", contype="0", conaffinity="0", mass="0",
+        )
+        ET.SubElement(
+            worldbody, "geom", name="replay_vertical_reference", type="cylinder",
+            pos="0.52 0.02 0.45", size="0.006 0.45",
+            rgba="0.30 0.92 0.78 1", contype="0", conaffinity="0", mass="0",
+        )
     friction = " ".join(str(v) for v in terrain.friction)
     ET.SubElement(
         worldbody, "geom", name="ground", type="plane", size="20 20 0.1",
@@ -182,8 +229,9 @@ class UZ05Model:
         """Angular velocity expressed in world coordinates.
 
         MuJoCo stores the rotational part of a free-joint ``qvel`` in the
-        free body's local frame. Keep this property's world-frame contract
-        explicit because callers may pass its result through ``body_frame``.
+        free body's local frame.  Keep this property's world-frame contract
+        explicit because callers commonly pass its result through
+        :meth:`body_frame`.
         """
         world = np.empty(3, dtype=np.float64)
         mujoco.mju_rotVecQuat(world, self.data.qvel[3:6], self.data.qpos[3:7])
@@ -287,7 +335,7 @@ class UZ05Model:
         return self.terrain.step_height * level
 
     def terrain_scan(self, base_x: float, forward_x: np.ndarray) -> np.ndarray:
-        """沿机体前方采样地形高度，返回相对当前支撑面的高度。
+        """沿世界 +X 方向采样地形高度，返回相对当前支撑面的高度。
 
         平面地形下恒为 0 → 观测分布不随地形切换而突变。
         """
@@ -300,3 +348,18 @@ class UZ05Model:
             dtype=np.float64,
         )
         return heights - support
+
+    def terrain_preview(
+        self, base_pos: np.ndarray, yaw: float, forward_offsets: np.ndarray
+    ) -> np.ndarray:
+        """Sparse yaw-aligned height readings for a forward range/depth sensor."""
+        position = np.asarray(base_pos, dtype=np.float64)
+        direction = np.array([np.cos(yaw), np.sin(yaw)], dtype=np.float64)
+        support = self.support_height(float(position[0]), float(position[1]))
+        return np.asarray([
+            self.support_height(
+                float(position[0] + offset * direction[0]),
+                float(position[1] + offset * direction[1]),
+            ) - support
+            for offset in np.asarray(forward_offsets, dtype=np.float64)
+        ], dtype=np.float64)

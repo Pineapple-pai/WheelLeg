@@ -145,9 +145,10 @@ urdf/
 tmp
 plot/
 
+# Keep runnable project shell scripts versionable.
+# Ignore experiment output by directory/type instead of ignoring every *.sh.
 test*.ipynb
 examples/*.mp4
-*.sh
 
 # sphinx docs output
 docs/html

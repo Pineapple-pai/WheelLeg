@@ -68,31 +68,31 @@
         <body name="left_leg_mount" pos="-0.210335 0 0">
           <body name="left_link_right_leg_2" pos="0 0 0">
             <joint name="left_J_chassis_link2" type="hinge" axis="1 0 0" damping="0.02" armature="0.015795" />
-            <inertial pos="0.0312788248 -0.0872244528 -0.0341169325" mass="0.33726515207227498" fullinertia="0.00213441307 0.000367588625 0.00177584952 -1.95845727e-07 6.72512301e-07 -0.000672571974" />
+            <inertial pos="0.031413202 -0.085627606 -0.031337860" mass="0.171230276" fullinertia="8.20395639e-05 0.00100056555 0.000950872888 2.36286912e-06 -6.15193731e-06 2.44483797e-05" />
             <geom name="left_link_right_leg_2_visual" type="mesh" mesh="left_link_right_leg_2" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
             <geom name="left_link_right_leg_2_collision_0" type="capsule" size="0.014" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.087263437 -0.036267659" />
             <geom name="left_link_right_leg_2_collision_1" type="capsule" size="0.014" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.193918746 -0.080594782" />
             <body name="left_link_right_leg_5" pos="0 -0.087263437 -0.036267659">
               <joint name="left_J_link2_link5" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-              <inertial pos="0.01525 0.0202954079 -0.0113681935" mass="0.10788547284235001" fullinertia="0.000349769167 0.000169439722 0.000181606949 0 0 0.000168198489" />
+              <inertial pos="0.015250000 0.020439251 -0.012670781" mass="0.070167584" fullinertia="0.000217563973 0.000104704409 0.000114029024 -1.58411173e-19 0 0.000100151686" />
               <geom name="left_link_right_leg_5_visual" type="mesh" mesh="left_link_right_leg_5" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
               <geom name="left_link_right_leg_5_collision_0" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.0872634346 -0.07100241" />
               <geom name="left_link_right_leg_5_collision_1" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.038083202 0.052675149" />
               <body name="left_link_right_leg_3" pos="0 0.0872634346 -0.07100241">
                 <joint name="left_J_link5_link3" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                <inertial pos="0.0273116548 0.043631697 0.0355011868" mass="0.055275907394814701" fullinertia="8.07813584e-05 3.27687454e-05 4.87260135e-05 0 0 -3.84174742e-05" />
+                <inertial pos="0.027120384 0.043631661 0.035501155" mass="0.018398452" fullinertia="2.89941384e-05 1.18439065e-05 1.74483054e-05 1.39721317e-13 1.19788112e-13 -1.34927117e-05" />
                 <geom name="left_link_right_leg_3_visual" type="mesh" mesh="left_link_right_leg_3" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                 <geom name="left_link_right_leg_3_collision_0" type="capsule" size="0.009" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.0872634434 0.071002411" />
                 <site name="left_site_link3_to_link4" pos="0 0.0872634434 0.071002411" size="0.002" rgba="1 0.2 0.1 0" />
               </body>
               <body name="left_link_right_leg_1" pos="0 -0.038083202 0.052675149">
                 <joint name="left_J_link5_link1" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                <inertial pos="0.00318713722 -0.053327692 -0.0221635943" mass="0.057077033175480997" fullinertia="8.6999945e-05 1.40259018e-05 7.37229014e-05 0 0 -2.9991192e-05" />
+                <inertial pos="0.003368055 -0.053327739 -0.022163614" mass="0.039809386" fullinertia="6.36769859e-05 1.07415345e-05 5.35821659e-05 -3.98881047e-13 -1.74998639e-13 -2.15227164e-05" />
                 <geom name="left_link_right_leg_1_visual" type="mesh" mesh="left_link_right_leg_1" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                 <geom name="left_link_right_leg_1_collision_0" type="capsule" size="0.009" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.106655319 -0.044327161" />
                 <body name="left_link_right_leg_6" pos="0 -0.106655319 -0.044327161">
                   <joint name="left_J_link1_link6" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                  <inertial pos="0.0154465748 0.129629238 -0.124969703" mass="0.35678989619168999" fullinertia="0.0036231355 0.00154094766 0.00209123503 7.35445334e-06 -6.61012664e-06 0.00172906234" />
+                  <inertial pos="0.015700881 0.128656407 -0.125290869" mass="0.191900565" fullinertia="0.00183780962 0.000779797203 0.00106474024 6.21271737e-07 -4.75597865e-07 0.000848923955" />
                   <geom name="left_link_right_leg_6_visual" type="mesh" mesh="left_link_right_leg_6" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                   <geom name="left_link_right_leg_6_collision_0" type="capsule" size="0.015" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.038083212 -0.052675111" />
                   <geom name="left_link_right_leg_6_collision_1" type="capsule" size="0.015" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.232001957 -0.210458263" />
@@ -111,7 +111,7 @@
           </body>
           <body name="left_link_right_leg_4" pos="0 0 0">
             <joint name="left_J_chassis_link4" type="hinge" axis="1 0 0" damping="0.02" armature="0.015795" />
-            <inertial pos="0.0154363205 0.0319502343 -0.0132788729" mass="0.27121511798094999" fullinertia="0.000367429102 7.52545039e-05 0.000295856827 1.21528679e-06 -5.05086728e-07 0.000110828476" />
+            <inertial pos="0.015574179 0.028469416 -0.011832205" mass="0.064787847" fullinertia="9.59166114e-05 2.30156772e-05 7.40870955e-05 5.97928122e-07 -2.48505548e-07 2.56577887e-05" />
             <geom name="left_link_right_leg_4_visual" type="mesh" mesh="left_link_right_leg_4" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
             <geom name="left_link_right_leg_4_collision_0" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.087263441 -0.036267658" />
             <site name="left_site_link4_to_link3" pos="0 0.087263441 -0.036267658" size="0.002" rgba="1 0.2 0.1 0" />
@@ -121,31 +121,31 @@
         <body name="right_leg_mount" pos="0.210335 0 0">
           <body name="right_link_right_leg_2" pos="0 0 0">
             <joint name="right_J_chassis_link2" type="hinge" axis="1 0 0" damping="0.02" armature="0.015795" />
-            <inertial pos="-0.0312788248 -0.0872244528 -0.0341169325" mass="0.38623297789897398" fullinertia="0.0024443104 0.000420959142 0.00203368668 2.24280741e-07 -7.70154957e-07 -0.000770223294" />
+            <inertial pos="-0.031413202 -0.085627606 -0.031337860" mass="0.171230276" fullinertia="8.20395639e-05 0.00100056555 0.000950872888 -2.36286912e-06 6.15193731e-06 2.44483797e-05" />
             <geom name="right_link_right_leg_2_visual" type="mesh" mesh="right_link_right_leg_2" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
             <geom name="right_link_right_leg_2_collision_0" type="capsule" size="0.014" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.087263437 -0.036267659" />
             <geom name="right_link_right_leg_2_collision_1" type="capsule" size="0.014" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.193918746 -0.080594782" />
             <body name="right_link_right_leg_5" pos="0 -0.087263437 -0.036267659">
               <joint name="right_J_link2_link5" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-              <inertial pos="-0.01525 0.0202954079 -0.0113681935" mass="0.10788547284235001" fullinertia="0.000349769167 0.000169439722 0.000181606949 0 0 0.000168198489" />
+              <inertial pos="-0.015250000 0.020439251 -0.012670781" mass="0.070167584" fullinertia="0.000217563973 0.000104704409 0.000114029024 1.58411173e-19 -0 0.000100151686" />
               <geom name="right_link_right_leg_5_visual" type="mesh" mesh="right_link_right_leg_5" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
               <geom name="right_link_right_leg_5_collision_0" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.0872634346 -0.07100241" />
               <geom name="right_link_right_leg_5_collision_1" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.038083202 0.052675149" />
               <body name="right_link_right_leg_3" pos="0 0.0872634346 -0.07100241">
                 <joint name="right_J_link5_link3" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                <inertial pos="-0.0273116548 0.043631697 0.0355011868" mass="0.055275907394814798" fullinertia="8.07813584e-05 3.27687454e-05 4.87260135e-05 0 0 -3.84174742e-05" />
+                <inertial pos="-0.027120384 0.043631661 0.035501155" mass="0.018398452" fullinertia="2.89941384e-05 1.18439065e-05 1.74483054e-05 -1.39721317e-13 -1.19788112e-13 -1.34927117e-05" />
                 <geom name="right_link_right_leg_3_visual" type="mesh" mesh="right_link_right_leg_3" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                 <geom name="right_link_right_leg_3_collision_0" type="capsule" size="0.009" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.0872634434 0.071002411" />
                 <site name="right_site_link3_to_link4" pos="0 0.0872634434 0.071002411" size="0.002" rgba="1 0.2 0.1 0" />
               </body>
               <body name="right_link_right_leg_1" pos="0 -0.038083202 0.052675149">
                 <joint name="right_J_link5_link1" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                <inertial pos="-0.00318713722 -0.053327692 -0.0221635943" mass="0.057077033175480997" fullinertia="8.6999945e-05 1.40259018e-05 7.37229014e-05 0 0 -2.9991192e-05" />
+                <inertial pos="-0.003368055 -0.053327739 -0.022163614" mass="0.039809386" fullinertia="6.36769859e-05 1.07415345e-05 5.35821659e-05 3.98881047e-13 1.74998639e-13 -2.15227164e-05" />
                 <geom name="right_link_right_leg_1_visual" type="mesh" mesh="right_link_right_leg_1" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                 <geom name="right_link_right_leg_1_collision_0" type="capsule" size="0.009" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 -0.106655319 -0.044327161" />
                 <body name="right_link_right_leg_6" pos="0 -0.106655319 -0.044327161">
                   <joint name="right_J_link1_link6" type="hinge" axis="1 0 0" damping="0.02" armature="0.0001" />
-                  <inertial pos="-0.0154465748 0.129629238 -0.124969703" mass="0.35678989607011002" fullinertia="0.00362313549 0.00154094766 0.00209123503 -7.35445334e-06 6.61012664e-06 0.00172906234" />
+                  <inertial pos="-0.015700881 0.128656407 -0.125290869" mass="0.191900565" fullinertia="0.00183780962 0.000779797203 0.00106474024 -6.21271737e-07 4.75597865e-07 0.000848923955" />
                   <geom name="right_link_right_leg_6_visual" type="mesh" mesh="right_link_right_leg_6" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
                   <geom name="right_link_right_leg_6_collision_0" type="capsule" size="0.015" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.038083212 -0.052675111" />
                   <geom name="right_link_right_leg_6_collision_1" type="capsule" size="0.015" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.232001957 -0.210458263" />
@@ -164,7 +164,7 @@
           </body>
           <body name="right_link_right_leg_4" pos="0 0 0">
             <joint name="right_J_chassis_link4" type="hinge" axis="1 0 0" damping="0.02" armature="0.015795" />
-            <inertial pos="-0.0154363205 0.0319502343 -0.0132788729" mass="0.109162611740991" fullinertia="0.000147888218 3.0289529e-05 0.000119080766 -4.8914633e-07 2.03294664e-07 4.46078597e-05" />
+            <inertial pos="-0.015574179 0.028469416 -0.011832205" mass="0.064787847" fullinertia="9.59166114e-05 2.30156772e-05 7.40870955e-05 -5.97928122e-07 2.48505548e-07 2.56577887e-05" />
             <geom name="right_link_right_leg_4_visual" type="mesh" mesh="right_link_right_leg_4" contype="0" conaffinity="0" rgba="0.65 0.7 0.75 1" />
             <geom name="right_link_right_leg_4_collision_0" type="capsule" size="0.012" mass="0" rgba="0.9 0.25 0.1 0.18" friction="1 0.01 0.001" solref="0.002 1" solimp="0.99 0.999 0.001" contype="1" conaffinity="1" fromto="0 0 0 0 0.087263441 -0.036267658" />
             <site name="right_site_link4_to_link3" pos="0 0.087263441 -0.036267658" size="0.002" rgba="1 0.2 0.1 0" />

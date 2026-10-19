@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import deque
-from dataclasses import asdict
 from typing import Any
 
 import gymnasium as gym
@@ -11,42 +10,29 @@ import numpy as np
 from gymnasium import spaces
 from scipy.spatial.transform import Rotation
 
-from .actuators import ActuatorBank, BalanceController, JointPDController, WheelEscController
+from .actuators import ActuatorBank, JointPDController, WheelEscController
 from .model import TerrainSpec, UZ05Model
+from .observations import ObservationEncoder
 from .spec import (
     ACTION_DIM,
-    ACTOR_OBS_BLOCKS,
-    OBS_BLOCKS,
-    ACTOR_OBS_DIM,
-    ACTOR_FRAME_DIM,
-    OBS_HISTORY,
-    PRIV_OBS_DIM,
     STAND_LEVELS,
-    ACTION_SLICES,
     DEFAULT_STAGE,
     DOF_ACC_WINDOW,
     EnvParams,
     OBS_DIM,
-    OBS_SCALE,
-    OBS_SLICES,
     STAGE_BY_NAME,
-    STAGES,
     StageSpec,
     active_rewards,
-    observation_noise_vector,
 )
 
 TERRAIN_SCAN_POINTS = 17
-MODE_NAMES = ("normal", "airborne", "stair", "recover", "jump")
-# 每个观测块的噪声半宽（对齐官方公式；由 spec 统一计算，环境里只查表）
-_NOISE_VEC = observation_noise_vector(EnvParams().noise)
 
 
 class UZ05Env(gym.Env):
     """两轮轮腿机器人的本体感知强化学习环境。
 
-    观测（214 维 = actor 34×历史5 + 特权 44）在任何 capability 下都完整存在
-    且实时更新，因此**任何 checkpoint 在任何阶段都能直接加载，永远不需要迁移**。
+    观测总计 94 维：当前 actor 观测 38 维，critic 特权观测 56 维；不堆叠历史帧，动作固定为 6 维。
+    观测收集与编码由独立 ObservationEncoder 负责，actor 不接收仿真阶段标签。
     """
 
     metadata = {"render_modes": []}
@@ -57,7 +43,6 @@ class UZ05Env(gym.Env):
         params: EnvParams | None = None,
         seed: int | None = None,
         stand_level: int = 2,
-        assist_scale: float = 1.0,
     ):
         super().__init__()
         if stage not in STAGE_BY_NAME:
@@ -65,26 +50,25 @@ class UZ05Env(gym.Env):
         self.stage: StageSpec = STAGE_BY_NAME[stage]
         self.params = params or EnvParams()
         self.rng = np.random.default_rng(seed)
-        # 站立分级课程：收紧漂移死区/硬限，并把辅助强度退火到 0
+        self._observation_encoder = ObservationEncoder(
+            self.params.noise, self.params.noise.clip_observations
+        )
+        # 站立分级课程只收紧 episode 终止边界；所有动作均来自 PPO。
         self.stand_level = STAND_LEVELS[0] if stand_level is None else next(
             (lv for lv in STAND_LEVELS if lv.level == int(stand_level)), STAND_LEVELS[-1]
         )
         self.params.station_deadband = self.stand_level.deadband
         self.params.station_hard_limit = self.stand_level.hard_limit
-        self.params.balance.station_deadband = self.stand_level.deadband
-        self.params.balance.station_kp = self.stand_level.station_kp
-        self.params.balance.assist_scale = float(np.clip(assist_scale, 0.0, 1.0))
         self.tilt_limit = self.stand_level.tilt_limit if stage == "stand" else self.stage.tilt_limit
+        self.yaw_limit = self.stand_level.yaw_hard_limit
 
         terrain = TerrainSpec(kind=self.stage.terrain)
         self.sim = UZ05Model(terrain)
-        # 必须把 EnvParams 里的执行器参数真正接进去，否则 assist_scale /
-        # 电流限幅 / 关节力矩限幅全都会静默使用 dataclass 默认值。
+        # 把环境中的真实执行器参数接入 wheel speed / joint position 驱动模型。
         self.actuators = ActuatorBank(
             robot=self.params.robot,
             joint=JointPDController(self.params.joint),
             wheel=WheelEscController(self.params.wheel),
-            balance=BalanceController(self.params.balance),
         )
 
         self.action_space = spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32)
@@ -100,33 +84,24 @@ class UZ05Env(gym.Env):
         self.nominal_xy = np.zeros(2, dtype=np.float64)
         self.prev_leg_lengths = self.sim.leg_lengths()
         self.tilt_exceed_steps = 0
+        self.body_contact_exceed_steps = 0
         self.airborne_prev = 0.0
         self.airborne_steps = 0
         self.jump_phase = 0
         self.jump_timer = 0.0
-        self.phase_clock = 0.0
         self.last_landing_impact = 0.0
         self._last_reward_terms: dict[str, float] = {}
         self._station_max_abs = 0.0
+        self._yaw_max_abs = 0.0
+        self._roll_max_abs = 0.0
+        self._pitch_max_abs = 0.0
+        self._ang_vel_sq_sum = 0.0
+        self._ang_vel_samples = 0
         self._station_window: deque = deque(maxlen=200)   # 末段稳态漂移窗口
-        self._actor_history: deque = deque(maxlen=OBS_HISTORY)   # actor 观测历史堆叠
         self._nominal_model = self.sim.nominal()                  # 域随机化基准值
         self.domain: dict = {}
         self._raw_cache: dict[str, np.ndarray] = {}
         self._info: dict[str, Any] = {}
-
-    # ==================================================================
-    # 辅助退火
-    # ==================================================================
-    def set_assist_scale(self, value: float) -> None:
-        """设置手写平衡外环的强度（1.0 全辅助 → 0.0 完全靠策略）。
-
-        验收必须在 0.0 下进行：不允许靠外部控制器或姿态硬约束维持平衡。
-        """
-        self.params.balance.assist_scale = float(np.clip(value, 0.0, 1.0))
-
-    def get_assist_scale(self) -> float:
-        return float(self.params.balance.assist_scale)
 
     # ==================================================================
     # 命令
@@ -190,8 +165,21 @@ class UZ05Env(gym.Env):
         )
 
         # 姿态
-        limit = stage.init_tilt
-        roll, pitch, yaw = self.rng.uniform(-limit, limit, 3)
+        limit = self.stand_level.init_tilt if stage.name == "stand" else stage.init_tilt
+        roll = float(self.rng.uniform(-limit, limit))
+        if stage.name == "stand" and self.rng.random() < 0.67:
+            # The paired replay exposed a repeatable backward-tilt failure;
+            # oversample that side while preserving positive-tilt coverage.
+            pitch = -float(self.rng.uniform(0.0, limit))
+        else:
+            pitch = float(self.rng.uniform(-limit, limit))
+        # The S2 yaw hard limit is only 5 degrees; sampling yaw from the same
+        # 0.08 rad tilt range starts episodes almost at termination. Keep yaw
+        # perturbations within one quarter of that boundary during stand.
+        yaw_init_limit = (
+            min(limit, 0.25 * self.yaw_limit) if stage.name == "stand" else limit
+        )
+        yaw = float(self.rng.uniform(-yaw_init_limit, yaw_init_limit))
         quat = Rotation.from_euler("xyz", [roll, pitch, yaw]).as_quat()
         self.sim.data.qpos[3:7] = [quat[3], quat[0], quat[1], quat[2]]
 
@@ -224,6 +212,11 @@ class UZ05Env(gym.Env):
         self.sim.forward()
 
         self.nominal_xy = self.sim.data.qpos[:2].copy()
+        reset_quat = self.sim.base_quat
+        reset_rot = Rotation.from_quat([
+            reset_quat[1], reset_quat[2], reset_quat[3], reset_quat[0]
+        ])
+        self.nominal_yaw = float(reset_rot.as_euler("xyz")[2])
         self.steps = 0
         self.previous_action[:] = 0.0
         self.prev_leg_lengths = self.sim.leg_lengths()
@@ -236,15 +229,19 @@ class UZ05Env(gym.Env):
         self._last_leg_torque = np.zeros(4, dtype=np.float64)            # 上一步关节力矩
         self._last_wheel_torque = np.zeros(2, dtype=np.float64)
         self.tilt_exceed_steps = 0
+        self.body_contact_exceed_steps = 0
         self.airborne_prev = 0.0
         self.airborne_steps = 0
         self.jump_phase = 0
         self.jump_timer = 0.0
-        self.phase_clock = 0.0
         self.last_landing_impact = 0.0
         self._station_max_abs = 0.0
+        self._yaw_max_abs = 0.0
+        self._roll_max_abs = 0.0
+        self._pitch_max_abs = 0.0
+        self._ang_vel_sq_sum = 0.0
+        self._ang_vel_samples = 0
         self._station_window: deque = deque(maxlen=200)   # 末段稳态漂移窗口
-        self._actor_history: deque = deque(maxlen=OBS_HISTORY)   # actor 观测历史堆叠
         self.actuators.reset()
         _, _, _, airborne_now = self.sim.contact_state()
         self.airborne_prev = airborne_now
@@ -252,13 +249,12 @@ class UZ05Env(gym.Env):
         return self._obs(), {}
 
     # ==================================================================
-    # 观测（全部常驻、始终实时）
+    # 观测状态收集；打包、缩放和加噪由 observations.py 负责
     # ==================================================================
     def _obs(self) -> np.ndarray:
         sim = self.sim
         quat = sim.base_quat
         rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
-        rpy = rot.as_euler("xyz")
         gravity_body = rot.inv().apply(np.array([0.0, 0.0, -1.0]))
         lin_vel_body = sim.body_frame(sim.base_lin_vel_world)
         ang_vel_body = sim.body_frame(sim.base_ang_vel_world)
@@ -266,9 +262,13 @@ class UZ05Env(gym.Env):
         leg_rate = (leg_lengths - self.prev_leg_lengths) / self.params.control_dt
         wheel_force, wheel_hit, body_hit, airborne = sim.contact_state()
         base_x = float(sim.base_pos[0])
-        mode = self._mode_onehot(airborne, base_x)
+        base_height_rel = float(sim.base_pos[2] - sim.support_height(base_x, float(sim.base_pos[1])))
+        yaw = float(rot.as_euler("xyz")[2])
+        yaw_error = self._heading_error(yaw)
+        terrain_preview = sim.terrain_preview(
+            sim.base_pos, yaw, np.array([0.10, 0.50, 0.90], dtype=np.float64)
+        )
 
-        dof_vel_now = np.concatenate([sim.joint_velocities(), sim.wheel_velocities()])
         # 官方口径 dof_acc：一个**控制周期**内的速度差（我们用 8 步窗口对齐官方
         # 的 0.0667 s，见 spec.DOF_ACC_WINDOW），否则惩罚会被放大 69 倍
         hist = self._dof_vel_hist
@@ -283,10 +283,12 @@ class UZ05Env(gym.Env):
 
         blocks = {
             "gravity": gravity_body,
-            "yaw": np.array([rpy[2]]),
-            "base_lin_vel": lin_vel_body,
             "base_ang_vel": ang_vel_body,
+            "heading_error_sincos": np.array([np.sin(yaw_error), np.cos(yaw_error)]),
+            "base_lin_vel": lin_vel_body,
+            "base_height_rel": np.array([base_height_rel], dtype=np.float64),
             "base_pos_rel": sim.data.qpos[:2] - self.nominal_xy,
+            "terrain_preview": terrain_preview,
             "leg_joint_pos": sim.joint_positions(),
             "leg_joint_vel": sim.joint_velocities(),
             "wheel_joint_vel": sim.wheel_velocities(),
@@ -303,61 +305,38 @@ class UZ05Env(gym.Env):
                 [self.domain[name][1] for name in
                  self.params.domain_randomization.PARAM_NAMES], dtype=np.float64
             ),
-            "phase": np.array([np.sin(self.phase_clock), np.cos(self.phase_clock)]),
-            "mode_onehot": mode,
+            # critic receives exact simulator values; actor counterparts above
+            # go through the sensor noise model in ObservationEncoder.
+            "base_lin_vel_true": lin_vel_body,
+            "base_pos_rel_true": sim.data.qpos[:2] - self.nominal_xy,
         }
-        # 原始物理量留一份：奖励与终端日志必须用真实单位，不能用归一化后的值
-        self._raw_cache = blocks
-        # 归一化（对齐开源 obs_scales）；标量或按分量向量
-        blocks = {
-            name: np.asarray(value, dtype=np.float64)
-            * np.asarray(OBS_SCALE.get(name, 1.0), dtype=np.float64)
-            for name, value in blocks.items()
-        }
-        self._obs_cache = blocks
-        # 1) 单帧 actor 观测（归一化 → 裁剪 → 加噪，顺序与官方一致）
-        frame = np.concatenate(
-            [blocks[name] for name in _BLOCK_ORDER if name in _ACTOR_BLOCK_NAMES]
-        ).astype(np.float64)
-        clip = float(self.params.noise.clip_observations)
-        if clip > 0:
-            np.clip(frame, -clip, clip, out=frame)
-        # 噪声半宽按 block 展开（官方公式见 spec.observation_noise_vector）
-        noise_vec = np.concatenate([
-            np.full(_BLOCK_WIDTH[name], _NOISE_VEC.get(name, 0.0))
-            for name in _BLOCK_ORDER if name in _ACTOR_BLOCK_NAMES
-        ])
-        if np.any(noise_vec):
-            frame += self.rng.uniform(-1.0, 1.0, frame.shape) * noise_vec
-        # 2) 历史堆叠（最早 → 最新）；不足时用最早一帧填充。
-        #    注意：噪声在入栈之前加，所以 5 帧历史各自独立带噪（与官方一致）。
-        if len(self._actor_history) == 0:
-            for _ in range(OBS_HISTORY):
-                self._actor_history.append(frame.copy())
-        else:
-            self._actor_history.append(frame.copy())
-        history = np.concatenate(list(self._actor_history))
-        # 3) 特权部分（单帧）
-        privileged = np.concatenate(
-            [blocks[name] for name in _BLOCK_ORDER if name not in _ACTOR_BLOCK_NAMES]
+        observation, self._raw_cache, self._obs_cache = self._observation_encoder.encode(
+            blocks, self.rng
         )
-        return np.concatenate([history, privileged]).astype(np.float32)
+        return observation
 
-    def _mode_onehot(self, airborne: float, base_x: float) -> np.ndarray:
-        onehot = np.zeros(len(MODE_NAMES), dtype=np.float64)
+    def _heading_error(self, yaw: float | None = None) -> float:
+        """Wrapped heading error relative to the robot's reset heading."""
+        if yaw is None:
+            quat = self.sim.base_quat
+            rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
+            yaw = float(rot.as_euler("xyz")[2])
+        delta = float(yaw) - float(getattr(self, "nominal_yaw", 0.0))
+        return float(np.arctan2(np.sin(delta), np.cos(delta)))
+
+    def _diagnostic_mode(self, airborne: float, base_x: float) -> str:
+        """Return a simulator-only label for logs; it is never sent to the actor."""
         if self.jump_phase:
-            onehot[MODE_NAMES.index("jump")] = 1.0
+            return "jump"
         elif self.stage.name == "recovery" and abs(
             self.sim.data.qpos[2] - self.params.robot.nominal_stand_height
         ) > 0.05:
-            onehot[MODE_NAMES.index("recover")] = 1.0
+            return "recover"
         elif airborne > 0.5:
-            onehot[MODE_NAMES.index("airborne")] = 1.0
+            return "airborne"
         elif self.sim.terrain_scan(base_x, np.zeros(1))[0] > 0.01:
-            onehot[MODE_NAMES.index("stair")] = 1.0
-        else:
-            onehot[MODE_NAMES.index("normal")] = 1.0
-        return onehot
+            return "stair"
+        return "normal"
 
     # ==================================================================
     # 步进
@@ -402,10 +381,21 @@ class UZ05Env(gym.Env):
             self._station_max_abs,
             abs(float(self.sim.data.qpos[0] - self.nominal_xy[0])),
         )
+        yaw_error = self._heading_error()
+        self._yaw_max_abs = max(self._yaw_max_abs, abs(yaw_error))
         self._station_window.append(
             abs(float(self.sim.data.qpos[0] - self.nominal_xy[0]))
         )
-        self.phase_clock += self.params.control_dt * 2.0 * np.pi / 0.6
+        post_quat = sim.base_quat
+        post_rot = Rotation.from_quat([
+            post_quat[1], post_quat[2], post_quat[3], post_quat[0]
+        ])
+        post_rpy = post_rot.as_euler("xyz")
+        post_ang_vel_body = sim.body_frame(sim.base_ang_vel_world)
+        self._roll_max_abs = max(self._roll_max_abs, abs(float(post_rpy[0])))
+        self._pitch_max_abs = max(self._pitch_max_abs, abs(float(post_rpy[1])))
+        self._ang_vel_sq_sum += float(np.square(post_ang_vel_body).sum())
+        self._ang_vel_samples += 1
         self._advance_jump_phase()
 
         # 推进 dof_acc 的速度历史（必须在 _obs() 之前，最后一格是当前速度）
@@ -426,15 +416,26 @@ class UZ05Env(gym.Env):
             "termination_reason": reasons,
             # 域随机化：原始值，供日志/复盘（critic 看到的是归一化版）
             "domain": {k: v[0] for k, v in self.domain.items()},
-            "mode": MODE_NAMES[int(np.argmax(self._obs_cache["mode_onehot"]))],
+            "mode": self._diagnostic_mode(
+                float(self._raw_cache["contact_flag"][3]), float(sim.base_pos[0])
+            ),
             **control_diag(self.actuators),
             **state,
             # ---- 姿态 ----
-            "roll": float(rpy_all[0]) if (rpy_all := Rotation.from_quat([
-                sim.base_quat[1], sim.base_quat[2], sim.base_quat[3], sim.base_quat[0]
-            ]).as_euler("xyz")) is not None else 0.0,
-            "yaw": float(rpy_all[2]),
-            "yaw_rate": float(sim.body_frame(sim.base_ang_vel_world)[2]),
+            "roll": float(post_rpy[0]),
+            "pitch": float(post_rpy[1]),
+            "yaw": float(post_rpy[2]),
+            "roll_max_abs": self._roll_max_abs,
+            "pitch_max_abs": self._pitch_max_abs,
+            "yaw_error": yaw_error,
+            "yaw_error_abs": abs(yaw_error),
+            "yaw_max_abs": self._yaw_max_abs,
+            "roll_rate": float(post_ang_vel_body[0]),
+            "pitch_rate": float(post_ang_vel_body[1]),
+            "yaw_rate": float(post_ang_vel_body[2]),
+            "angular_velocity_rms": float(np.sqrt(
+                self._ang_vel_sq_sum / max(1, self._ang_vel_samples)
+            )),
             "body_vy": float(sim.body_frame(sim.base_lin_vel_world)[1]),
             "base_height": float(self.sim.data.qpos[2]),
             "station_error": float(self.sim.data.qpos[0] - self.nominal_xy[0]),
@@ -446,7 +447,6 @@ class UZ05Env(gym.Env):
             "station_tail_mean": float(np.mean(self._station_window))
             if self._station_window else 0.0,
             "episode_steps": int(self.steps),
-            "assist_scale": self.params.balance.assist_scale,
             "leg_length_left": float(self._obs_cache["leg_length"][0]),
             "leg_length_right": float(self._obs_cache["leg_length"][1]),
             "leg_length_rate_mean": float(self._obs_cache["leg_length"][2:].mean()),
@@ -526,8 +526,12 @@ class UZ05Env(gym.Env):
         leg_lengths = sim.leg_lengths()
         leg_mean = float(leg_lengths.mean())
         leg_diff = float(leg_lengths[0] - leg_lengths[1])
-        leg_error = leg_mean - float(self.command[3])
-        height_error = float(sim.data.qpos[2] - self.params.robot.nominal_stand_height)
+        # command[3] is base height above the local support surface, not leg length.
+        base_height_rel = float(
+            sim.base_pos[2] - sim.support_height(float(sim.base_pos[0]), float(sim.base_pos[1]))
+        )
+        height_error = base_height_rel - float(self.command[3])
+        leg_error = leg_mean - float(self.params.robot.nominal_leg_length)
         station_error = float(sim.data.qpos[0] - self.nominal_xy[0])
         wheel_force, wheel_hit, body_hit, airborne = sim.contact_state()
 
@@ -606,13 +610,21 @@ class UZ05Env(gym.Env):
         else:
             upright = np.exp(-(20.0 * tilt_sq))
         terms["upright"] = w.upright * upright
-        terms["height"] = -w.height * height_error * height_error
-        terms["leg_length"] = -w.leg_length * leg_error * leg_error
+        # Meter-scale squared errors were almost zero at the observed collapsed
+        # pose (height 0.18 m, legs 0.12 m), so PPO could gain by resting on the
+        # chassis. Normalize stand errors by 5 cm to give the requested stance a
+        # useful gradient while preserving the old scale for other stages.
+        height_scale = 0.05 if self.stage.name == "stand" else 1.0
+        leg_scale = 0.05 if self.stage.name == "stand" else 1.0
+        terms["height"] = -w.height * (height_error / height_scale) ** 2
+        terms["leg_length"] = -w.leg_length * (leg_error / leg_scale) ** 2
         terms["posture_symmetry"] = -w.leg_symmetry * leg_diff * leg_diff
         terms["joint_neutral"] = -w.joint_neutral * float(np.square(joint_pos).mean())
 
         # ------------------------------------------------- regularization
         terms["action_rate"] = -w.action_rate * float(np.square(action - self.previous_action).mean())
+        action_accel = action - 2.0 * self.previous_action + self.prev_action_prev
+        terms["action_smooth"] = -w.action_smooth * float(np.square(action_accel).mean())
         terms["leg_action"] = -w.leg_action * float(np.square(action[2:6]).mean())
         terms["leg_velocity_action"] = 0.0   # 动作通道已移除
         terms["joint_velocity"] = -w.joint_velocity * min(float(np.square(joint_vel).mean()), 400.0)
@@ -667,11 +679,55 @@ class UZ05Env(gym.Env):
         if flags["stand_still"] and not self.command_active:
             terms["stand_vx"] = -w.stand_vx * abs(vx)
             terms["stand_yaw"] = -w.stand_yaw * abs(yaw_rate)
+            heading_error = self._heading_error(float(rpy[2]))
+            terms["stand_heading"] = -w.stand_heading * heading_error * heading_error
+            terms["stand_ang_vel"] = -w.stand_ang_vel * float(
+                np.square(ang_vel_body).sum()
+            )
+            terms["stand_tilt"] = -w.stand_tilt * tilt_sq
             terms["stand_wheel"] = -w.stand_wheel_speed * min(
                 float(np.square(sim.wheel_velocities()).mean()), 25.0
             )
+            # In this MJCF, a positive common wheel-speed target increases
+            # pitch (verified by paired one-step torque probes). Give PPO a
+            # direct corrective signal instead of relying only on eventual
+            # fall/termination feedback.
+            pitch_balance_weight = w.stand_balance_action * (1.5 if pitch < 0.0 else 1.0)
+            terms["stand_balance_action"] = -pitch_balance_weight * (
+                float(np.clip(pitch, -0.4, 0.4)) * float(action[0])
+            )
+            terms["stand_balance_rate"] = -w.stand_balance_rate * (
+                float(np.clip(ang_vel_body[1], -2.0, 2.0)) * float(action[0])
+            )
+            terms["stand_hip_action"] = 0.0  # leg_action regularizer is shared with other stages
+            negative_hip_action = max(0.0, -float(np.mean(action[2:6])))
+            negative_pitch_factor = float(np.clip(-pitch / 0.08, 0.0, 1.0))
+            negative_pitch_rate_factor = float(
+                np.clip(-ang_vel_body[1] / 0.30, 0.0, 1.0)
+            )
+            terms["stand_negative_pitch_hip_action"] = (
+                -w.stand_negative_pitch_hip_action * negative_pitch_factor
+                * negative_pitch_rate_factor * negative_hip_action * negative_hip_action
+            )
+            heading_error = self._heading_error(float(rpy[2]))
+            terms["stand_heading_action"] = -w.stand_heading_action * (
+                heading_error * float(action[1])
+            )
+            terms["stand_heading_rate"] = -w.stand_heading_rate * (
+                float(np.clip(ang_vel_body[2], -2.0, 2.0)) * float(action[1])
+            )
+            # A chassis/gimbal touch is a collapsed stand, even if the wheels
+            # keep the body from crossing the tilt termination threshold.
+            terms["stand_body_contact"] = -w.stand_body_contact * body_hit
         else:
-            terms["stand_vx"] = terms["stand_yaw"] = terms["stand_wheel"] = 0.0
+            terms["stand_vx"] = terms["stand_yaw"] = terms["stand_heading"] = 0.0
+            terms["stand_tilt"] = 0.0
+            terms["stand_ang_vel"] = terms["stand_wheel"] = 0.0
+            terms["stand_body_contact"] = 0.0
+            terms["stand_balance_action"] = terms["stand_balance_rate"] = 0.0
+            terms["stand_hip_action"] = 0.0
+            terms["stand_negative_pitch_hip_action"] = 0.0
+            terms["stand_heading_action"] = terms["stand_heading_rate"] = 0.0
 
         # ----------------------------------------------------------- airborne
         if flags["airborne"]:
@@ -716,19 +772,34 @@ class UZ05Env(gym.Env):
             terms["recovery_upright"] = terms["recovery_progress"] = 0.0
 
         # ---------------------------------------------------------- alive/term
-        # 兜底：连续惩罚项总和不得低于 -10/步。
-        # 这一步是"防 hack 保险丝"——万一将来加项忘了收紧 clip，
-        # 也不会出现"摔倒比站着更划算"的激励反转。
-        continuous = sum(v for k, v in terms.items()
-                         if k not in ("upright", "track_vx", "track_yaw",
-                                      "airborne_upright", "recovery_upright",
-                                      "recovery_progress", "jump_height", "alive"))
-        if continuous < -10.0:
-            scale = 10.0 / abs(continuous)
-            for k in list(terms):
-                if k not in ("upright", "track_vx", "track_yaw", "airborne_upright",
-                             "recovery_upright", "recovery_progress", "jump_height", "alive"):
-                    terms[k] *= scale
+        # Bound regularizers, never rescale the task objective. The old global
+        # cap forced every collapsed stand to exactly -10 reward/step, erasing
+        # the height, upright, and body-contact gradients needed to leave that
+        # local optimum.
+        regularizers = {
+            "posture_symmetry", "joint_neutral", "action_rate", "action_smooth",
+            "leg_action", "joint_velocity", "joint_torque", "wheel_power",
+            "wheel_differential", "stand_wheel",
+        }
+        if self.stage.name == "stand":
+            regularization = sum(terms.get(key, 0.0) for key in regularizers)
+            if regularization < -5.0:
+                scale = 5.0 / abs(regularization)
+                for key in regularizers:
+                    if key in terms:
+                        terms[key] *= scale
+        else:
+            # Keep the existing safety bound for the other capability stages.
+            protected = {
+                "upright", "track_vx", "track_yaw", "airborne_upright",
+                "recovery_upright", "recovery_progress", "jump_height", "alive",
+            }
+            continuous = sum(v for k, v in terms.items() if k not in protected)
+            if continuous < -10.0:
+                scale = 10.0 / abs(continuous)
+                for key in terms:
+                    if key not in protected:
+                        terms[key] *= scale
         terms["alive"] = w.alive
         terms["termination"] = -w.termination if terminated else 0.0
 
@@ -746,12 +817,31 @@ class UZ05Env(gym.Env):
         reachable_height = self.params.robot.leg_length_min * 0.6
         reasons: list[str] = []
 
-        if tilt > self.tilt_limit:
+        # Keep the positive and negative boundary identical despite Euler-angle
+        # floating-point roundoff at exactly the configured limit.
+        if tilt > self.tilt_limit + 1e-9:
             self.tilt_exceed_steps += 1
-            if self.tilt_exceed_steps > self.stage.tilt_limit_hold_steps:
+            if self.tilt_exceed_steps >= self.stage.tilt_limit_hold_steps:
                 reasons.append("tilt_limit")
         else:
             self.tilt_exceed_steps = 0
+
+        # Chassis/gimbal support is a fall, even when the wheels keep the base
+        # just inside the angular limit. Require a few consecutive frames to
+        # ignore one-step contact solver noise.
+        if self.stage.name == "stand":
+            _, _, body_hit, _ = sim.contact_state()
+            self.body_contact_exceed_steps = (
+                self.body_contact_exceed_steps + 1 if body_hit > 0.5 else 0
+            )
+            if self.body_contact_exceed_steps >= 3:
+                reasons.append("body_contact")
+        else:
+            self.body_contact_exceed_steps = 0
+
+        yaw_error = self._heading_error(float(rpy[2]))
+        if self.stage.name == "stand" and abs(yaw_error) > self.yaw_limit:
+            reasons.append("yaw_limit")
 
         if sim.data.qpos[2] < reachable_height:
             reasons.append("height_limit")
@@ -776,7 +866,3 @@ class UZ05Env(gym.Env):
 
 def control_diag(bank: ActuatorBank) -> dict[str, float]:
     return dict(bank.diagnostics)
-
-_BLOCK_ORDER = tuple(name for name, _ in OBS_BLOCKS)
-_BLOCK_WIDTH = {name: width for name, width in OBS_BLOCKS}
-_ACTOR_BLOCK_NAMES = frozenset(name for name, _ in ACTOR_OBS_BLOCKS)

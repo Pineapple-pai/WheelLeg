@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1117">
+  <title>UZ-05 · 站立策略回放</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1117; --panel:#111a22; --line:#253440; --muted:#8ba0ae; --text:#e9f1f5; --cyan:#5ce1d0; --lime:#c9f27a; --red:#ff8179; }
+    * { box-sizing:border-box }
+    body { margin:0; min-height:100vh; color:var(--text); background:radial-gradient(1000px 560px at 70% -15%,#1d3540 0%,transparent 65%),var(--bg); font:14px/1.45 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    .wrap { width:min(1440px,100%); margin:auto; padding:24px clamp(16px,3vw,42px) 30px; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:19px; }
+    .brand { display:flex; align-items:center; gap:13px; }
+    .mark { width:39px; height:39px; display:grid; place-items:center; border:1px solid #31515b; border-radius:12px; color:var(--cyan); background:#10232a; font-size:20px; }
+    h1 { margin:0; font-size:18px; letter-spacing:.01em; font-weight:650; }
+    .sub { color:var(--muted); margin-top:3px; font-size:12px; }
+    .live { display:flex; align-items:center; gap:8px; color:#b3c1c9; border:1px solid var(--line); background:#101820; padding:8px 11px; border-radius:999px; font-size:12px; }
+    .dot { width:7px; height:7px; background:var(--cyan); border-radius:50%; box-shadow:0 0 12px var(--cyan); }
+    .layout { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:17px; align-items:stretch; }
+    .stage,.panel { border:1px solid var(--line); background:linear-gradient(150deg,rgba(20,31,40,.96),rgba(13,21,28,.97)); border-radius:16px; overflow:hidden; box-shadow:0 18px 60px #0003; }
+    .stage-head { height:52px; padding:0 17px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--line); color:#bdcbd2; font-size:12px; }
+    .view-label { display:flex; gap:8px; align-items:center; letter-spacing:.08em; text-transform:uppercase; font-size:10px; color:#8ba0ae; }
+    .chip { border:1px solid #30434e; background:#101a21; border-radius:6px; padding:5px 8px; color:#a9bbc4; font-size:11px; }
+    .screen { position:relative; aspect-ratio:16/10; min-height:340px; background:radial-gradient(ellipse at 50% 56%,#25343a,#101820 70%); display:grid; place-items:center; overflow:hidden; }
+    .screen { touch-action:none; user-select:none; cursor:grab; }
+    .screen.dragging { cursor:grabbing; }
+    .screen img { width:100%; height:100%; object-fit:contain; display:block; pointer-events:none; }
+    .scan { pointer-events:none; position:absolute; inset:0; opacity:.15; background:repeating-linear-gradient(0deg,transparent 0 3px,#9bb7c0 4px,transparent 5px); mix-blend-mode:soft-light; }
+    .frame-tag { position:absolute; left:15px; bottom:14px; padding:6px 9px; border-radius:6px; background:#091117c9; border:1px solid #ffffff20; color:#b6c6cd; font:11px ui-monospace,monospace; }
+    .controls { display:flex; align-items:center; justify-content:space-between; gap:12px; border-top:1px solid var(--line); padding:13px 16px; }
+    .buttons { display:flex; gap:8px; }
+    button { cursor:pointer; border:1px solid #344854; border-radius:9px; padding:9px 13px; color:#deeaee; background:#17232b; font:600 12px inherit; transition:.15s; }
+    button:hover { border-color:#65cfc3; background:#1c3037; }
+    button.primary { color:#081514; border-color:var(--cyan); background:var(--cyan); }
+    button.primary:hover { filter:brightness(1.08); }
+    .hint { color:var(--muted); font-size:11px; }
+    .panel { padding:17px; }
+    .panel-title { display:flex; justify-content:space-between; align-items:center; margin-bottom:14px; }
+    .panel-title h2 { margin:0; font-size:13px; font-weight:620; }
+    .episode { color:#92a6b0; font:11px ui-monospace,monospace; }
+    .status { display:flex; align-items:center; gap:8px; border-radius:8px; padding:9px 10px; margin-bottom:14px; background:#142521; color:#aee7d4; font-size:12px; }
+    .status.paused { color:#d5c58c; background:#28251a; }
+    .status.failed { color:#ffc0b9; background:#2c1e20; }
+    .stats { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .stat { border:1px solid #23323c; background:#0e171e; padding:11px 10px 10px; border-radius:10px; min-width:0; }
+    .label { color:#8ca0aa; font-size:10px; letter-spacing:.04em; }
+    .value { margin-top:5px; color:#e5eef1; font:600 19px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:nowrap; }
+    .value small { margin-left:3px; color:#8da1aa; font:11px ui-sans-serif,system-ui; }
+    .wide { grid-column:1/-1; }
+    .meter-wrap { margin-top:8px; height:4px; background:#27343b; border-radius:10px; overflow:hidden; }
+    .meter { width:0%; height:100%; background:linear-gradient(90deg,var(--cyan),var(--lime)); transition:width .2s; }
+    .caption { margin-top:14px; color:#8da1aa; font-size:11px; line-height:1.6; }
+    .caption strong { color:#c9d5da; font-weight:550; }
+    .footer { display:flex; justify-content:space-between; gap:10px; padding:14px 3px 0; color:#6f838e; font-size:10px; }
+    @media(max-width:900px) { .layout { grid-template-columns:1fr; } .panel { display:grid; grid-template-columns:1fr 1fr; gap:0 16px; } .panel-title,.status,.caption { grid-column:1/-1; } .stats { grid-column:1/-1; } }
+    @media(max-width:580px) { .wrap { padding:15px 12px 24px; } header { margin-bottom:13px; } h1 { font-size:15px; } .live { font-size:0; } .screen { min-height:260px; } .controls { align-items:flex-start; flex-direction:column; } .hint { font-size:10px; } .panel { display:block; } }
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header>
+      <div class="brand"><div class="mark">◈</div><div><h1>UZ-05 站立策略回放</h1><div class="sub">MuJoCo 实时仿真 · 零速度命令 · 确定性策略</div></div></div>
+      <div class="live"><span class="dot" id="liveDot"></span><span id="liveLabel">正在连接仿真</span></div>
+    </header>
+    <div class="layout">
+      <section class="stage">
+        <div class="stage-head"><div class="view-label"><span>◉</span> INTERACTIVE VIEW · WORLD Z UP</div><span class="chip" id="modelLabel">UZ-05 · STAND</span></div>
+        <div class="screen" id="screen"><img src="/stream.mjpg" alt="UZ-05 MuJoCo 实时回放"><div class="scan"></div><div class="frame-tag" id="frameTag">SIM · CONNECTING</div></div>
+        <div class="controls"><div class="buttons"><button class="primary" id="playBtn" onclick="control('toggle')">暂停</button><button id="resetBtn" onclick="control('reset')">↻　重置回放</button><button id="viewResetBtn" onclick="cameraCommand('reset')">⌖　重置视角</button></div><div class="hint">左键旋转 · 中键平移 · 右键/滚轮缩放 · 双击重置视角</div></div>
+      </section>
+      <aside class="panel">
+        <div class="panel-title"><h2>实时状态</h2><span class="episode" id="episode">EP 01</span></div>
+        <div class="status" id="status"><span class="dot"></span><span id="statusText">策略运行中</span></div>
+        <div class="stats">
+          <div class="stat"><div class="label">仿真步数</div><div class="value" id="step">0<small>步</small></div></div>
+          <div class="stat"><div class="label">当前奖励</div><div class="value" id="reward">0.000</div></div>
+          <div class="stat"><div class="label">机身俯仰角　·　绕 Y 轴</div><div class="value" id="pitch">0.00<small>°</small></div></div>
+          <div class="stat"><div class="label">横滚角</div><div class="value" id="roll">0.00<small>°</small></div></div>
+          <div class="stat"><div class="label">机身速度</div><div class="value" id="vx">0.000<small>m/s</small></div></div>
+          <div class="stat"><div class="label">相对航向</div><div class="value" id="yaw">0.00<small>°</small></div></div>
+          <div class="stat wide"><div class="label">站立位置偏移　·　最大 <span id="maxDrift">0.0</span> cm</div><div class="value" id="drift">0.0<small>cm</small></div><div class="meter-wrap"><div class="meter" id="driftMeter"></div></div></div>
+          <div class="stat"><div class="label">机身高度</div><div class="value" id="height">0.000<small>m</small></div></div>
+          <div class="stat"><div class="label">命令速度</div><div class="value" id="command">0.000<small>m/s</small></div></div>
+        </div>
+        <div class="caption"><strong>回放策略：</strong><span id="checkpoint">stand_negative_rate_refine_v1</span><br>零命令站立 · S2 位置/航向约束 · 实际 MJCF 网格渲染</div>
+      </aside>
+    </div>
+    <div class="footer"><span>本地运行 · 当前模型与 checkpoint 契约校验通过后加载</span><span>浏览器只显示仿真状态，不修改训练文件</span></div>
+  </main>
+  <script>
+    const $ = id => document.getElementById(id);
+    const deg = x => (x * 180 / Math.PI).toFixed(2);
+    async function control(command) {
+      try { await fetch('/control', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command})}); await refresh(); }
+      catch (e) { $('liveLabel').textContent = '控制请求失败'; }
+    }
+    async function cameraCommand(action, dx=0, dy=0) {
+      try {
+        await fetch('/camera', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({action,dx,dy})
+        });
+      } catch (e) { $('liveLabel').textContent = '视角控制请求失败'; }
+    }
+
+    const screen = $('screen');
+    let drag = null;
+    let queuedCamera = null;
+    let cameraFrame = 0;
+    function queueCamera(action, dx, dy) {
+      if (!queuedCamera || queuedCamera.action !== action) {
+        if (queuedCamera) flushCamera();
+        queuedCamera = {action, dx:0, dy:0};
+      }
+      queuedCamera.dx += dx;
+      queuedCamera.dy += dy;
+      if (!cameraFrame) cameraFrame = requestAnimationFrame(flushCamera);
+    }
+    function flushCamera() {
+      if (cameraFrame) cancelAnimationFrame(cameraFrame);
+      cameraFrame = 0;
+      if (!queuedCamera) return;
+      const command = queuedCamera;
+      queuedCamera = null;
+      cameraCommand(command.action, command.dx, command.dy);
+    }
+    screen.addEventListener('contextmenu', event => event.preventDefault());
+    screen.addEventListener('pointerdown', event => {
+      if (event.button < 0 || event.button > 2) return;
+      event.preventDefault();
+      const action = event.button === 0 ? 'rotate' : (event.button === 1 ? 'pan' : 'zoom');
+      drag = {pointerId:event.pointerId, action, x:event.clientX, y:event.clientY};
+      screen.setPointerCapture(event.pointerId);
+      screen.classList.add('dragging');
+    });
+    screen.addEventListener('pointermove', event => {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      const dx = event.clientX - drag.x;
+      const dy = event.clientY - drag.y;
+      drag.x = event.clientX;
+      drag.y = event.clientY;
+      queueCamera(drag.action, dx, dy);
+    });
+    function endDrag(event) {
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      flushCamera();
+      drag = null;
+      screen.classList.remove('dragging');
+    }
+    screen.addEventListener('pointerup', endDrag);
+    screen.addEventListener('pointercancel', endDrag);
+    screen.addEventListener('wheel', event => {
+      event.preventDefault();
+      queueCamera('zoom', 0, event.deltaY);
+    }, {passive:false});
+    screen.addEventListener('dblclick', () => cameraCommand('reset'));
+    async function refresh() {
+      try {
+        const s = await (await fetch('/state',{cache:'no-store'})).json();
+        $('liveLabel').textContent = s.paused ? '仿真已暂停' : '实时仿真';
+        $('liveDot').style.background = s.paused ? '#e4c66f' : 'var(--cyan)';
+        $('playBtn').textContent = s.done ? '重新开始' : (s.paused ? '继续' : '暂停');
+        $('playBtn').onclick = () => control(s.done ? 'reset' : 'toggle');
+        $('status').classList.toggle('paused',s.paused && !s.done);
+        $('status').classList.toggle('failed',s.done);
+        $('statusText').textContent = s.done ? (s.reason || '本回合结束') : (s.paused ? '回放已暂停' : '策略运行中');
+        $('step').innerHTML = `${s.step}<small>步</small>`;
+        $('reward').textContent = Number(s.reward).toFixed(3);
+        $('pitch').innerHTML = `${deg(s.pitch)}<small>°</small>`;
+        $('roll').innerHTML = `${deg(s.roll)}<small>°</small>`;
+        $('yaw').innerHTML = `${deg(s.yaw_error)}<small>°</small>`;
+        $('vx').innerHTML = `${Number(s.vx).toFixed(3)}<small>m/s</small>`;
+        $('command').innerHTML = `${Number(s.command_vx).toFixed(3)}<small>m/s</small>`;
+        $('height').innerHTML = `${Number(s.height).toFixed(3)}<small>m</small>`;
+        $('drift').innerHTML = `${(s.drift*100).toFixed(1)}<small>cm</small>`;
+        $('maxDrift').textContent = (s.max_drift*100).toFixed(1);
+        $('driftMeter').style.width = `${Math.min(100,Math.abs(s.drift)*100/5)}%`;
+        $('episode').textContent = `EP ${String(s.episode).padStart(2,'0')}`;
+        $('checkpoint').textContent = s.checkpoint;
+        $('frameTag').textContent = `SIM · ${String(s.step).padStart(4,'0')} STEPS`;
+      } catch (e) { $('liveLabel').textContent = '等待仿真服务'; }
+    }
+    refresh(); setInterval(refresh, 250);
+  </script>
+</body>
+</html>

@@ -2,13 +2,12 @@
 
 设计原则
 --------
-1. **观测全量常驻且始终实时计算**：所有观测块从第一天就存在，永远输出真实值。
-   capability 开关只控制奖励/课程/终止，不改变观测维度与分布。
-   => 任何 checkpoint 在任何 capability 组合下都能直接加载，**永远不需要迁移**。
-2. **动作恒为 10 维**：已覆盖全部 8 个能力（含腿长、跳跃、自救），不随能力扩容。
-3. **坐标系全部用机体系**（x 前 / y 左 / z 上），只使用实机陀螺仪与编码器可测量的量：
-   姿态用重力投影、角速度用机体角速度、速度用机体前向速度、高度用腿长/相对支撑面。
-4. **奖励全部实现**，由权重表开关；关闭项权重为 0。
+1. actor 与 critic 观测分开定义：actor 输入带传感器噪声的当前估计量，critic 另有
+   仿真特权量。观测布局由 ``observations.py`` 按这里的单一事实来源严格校验。
+2. **动作恒为 6 维**：两路轮速目标和四路腿关节位置偏置。
+3. **机器人轴定义为机体系**（x 前 / y 左 / z 上）；观测来源与实机信号等价性仍需
+   逐块验证，不能只根据名称推断。
+4. 奖励项由阶段配置和奖励权重控制；官方奖励分支会直接返回，不使用自定义奖励组。
 
 物理约定（已用 MuJoCo 实测确认）
 --------------------------------
@@ -20,6 +19,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -27,8 +27,10 @@ from pathlib import Path
 # 路径
 # --------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_XML = REPO_ROOT / "diagnostics" / "uz05.xml"
-MESH_DIR = Path("/home/p/WheelLegMJCFReference/meshes/stl")
+MODEL_XML = REPO_ROOT / "uz05_修正后(3).xml"
+MESH_DIR = Path(os.environ.get(
+    "UZ05_MESH_DIR", str(REPO_ROOT / "model_source" / "uz05" / "mjcf_meshes")
+)).expanduser()
 
 # --------------------------------------------------------------------------
 # 能力（按训练顺序）
@@ -84,10 +86,14 @@ class StageSpec:
 STAGES: tuple[StageSpec, ...] = (
     StageSpec(
         name="stand",
-        official_rewards=True,
+        # 站立要优化站位、绝对航向和动作平滑，使用下方站立专用 shaping。
+        official_rewards=False,
         vx_range=(0.0, 0.0), zero_command_prob=1.0,
         init_tilt=0.03, init_tilt_rate=0.02, init_vel=0.02,
-        reward_groups=("posture", "regularization", "limits"),
+        # Allow 40 control frames (320 ms) to recover after a transient tilt
+        # crossing. The positive and negative pitch boundaries are identical.
+        tilt_limit_hold_steps=40,
+        reward_groups=("posture", "regularization", "limits", "stand_still"),
         episode_steps=1000,
     ),
     StageSpec(
@@ -174,55 +180,57 @@ DEFAULT_STAGE = "stand"
 
 @dataclass(frozen=True)
 class StandLevel:
-    """站立分级课程：逐级收紧前后漂移要求，最终验收 ±5 cm。"""
+    """站立分级课程：逐级收紧漂移和航向要求，最终验收 ±5 cm / ±5°。"""
 
     level: int
     name: str
     deadband: float          # 奖励死区（m）
     hard_limit: float        # 超出即终止（m）
+    yaw_hard_limit: float    # 相对初始航向超出即终止（rad）
     tilt_limit: float        # 终止倾角（rad）
     init_tilt: float
-    station_kp: float        # 站定位置环增益（Nm/m）
-    assist_start: float      # 本阶段起始辅助强度（1.0 = 全辅助）
-    assist_end: float        # 本阶段结束辅助强度（0.0 = 完全靠策略）
     note: str
 
 
 STAND_LEVELS: tuple[StandLevel, ...] = (
-    StandLevel(0, "S0_balance", 0.08, 0.40, 0.30, 0.05, 100.0, 1.00, 0.60,
-               "先学会不摔：辅助 1.0→0.6，漂移硬限放宽到 ±40 cm"),
-    StandLevel(1, "S1_tighten", 0.05, 0.20, 0.25, 0.04, 120.0, 0.60, 0.20,
-               "收紧到 ±20 cm 硬限，辅助退到 0.20"),
-    StandLevel(2, "S2_accept", 0.04, 0.12, 0.22, 0.03, 120.0, 0.20, 0.00,
-               "验收：辅助退到 0，前后漂移 ±5 cm 内，超差即终止"),
+    StandLevel(0, "S0_balance", 0.02, 0.40, 0.7854, 0.30, 0.02,
+               "从近直立初态学会站住：漂移硬限 ±40 cm、偏航 ±45°"),
+    StandLevel(1, "S1_tighten", 0.03, 0.20, 0.2618, 0.25, 0.04,
+               "纯 PPO 收紧到漂移硬限 ±20 cm、偏航 ±15°"),
+    StandLevel(2, "S2_accept", 0.00, 0.05, 0.0873, 0.20, 0.08,
+               "验收：纯 PPO 全程漂移 ±5 cm、偏航 ±5°；倾角 11.5° 为恢复边界"),
 )
 STAND_LEVEL_BY_INDEX = {lv.level: lv for lv in STAND_LEVELS}
 
 # --------------------------------------------------------------------------
-# 观测（固定 73 维，全部常驻且始终实时计算）
+# 观测（94 维：当前 actor 帧 38 + critic 特权观测 56）
 # --------------------------------------------------------------------------
 # 观测拆分为「actor 可见」与「仅 critic 的特权部分」——对齐开源的非对称 actor-critic。
 #
-#   actor  : 只放**实机测得到**的量（编码器 / 陀螺仪 / 加速度计 / 电调回传 / 内部时钟）
+#   actor  : 状态估计器、IMU、编码器和高度/地形传感器可提供的输入；不放仿真阶段标签
 #   critic : actor 全部 + 仿真真值（线速度、相对位移、接触力、地形…）
 #
-# 关键：旧 73 维 checkpoint 与当前接口**不兼容**（被删掉的通道是活信号，不是恒零占位），
-# 已决定弃用旧 checkpoint 重新训练。接口从此固定，后续只增能力、不改维度。
+# actor 使用当前 38 维观测，不堆叠历史帧；critic 专属 56 维。
+# 相对初始航向的 sin/cos 使零命令下也能观测和修正累计偏航。
+# 无历史观测的 MLP 接口使用 uz05_iface_v5（含执行器契约）。
 ACTOR_OBS_BLOCKS: tuple[tuple[str, int], ...] = (
     ("gravity", 3),          # 重力投影（加速度计）—— 对齐开源 projected_gravity_b
     ("base_ang_vel", 3),     # 机体角速度（陀螺仪）—— 对齐 root_ang_vel_b
+    ("heading_error_sincos", 2),  # 相对 episode 初始航向误差的 sin/cos
+    ("base_lin_vel", 3),     # 机体系速度估计（IMU + 轮速/里程计融合）
+    ("base_height_rel", 1),  # 相对当前地面的高度测量（高度传感器）
+    ("base_pos_rel", 2),     # 相对起点的水平里程计估计（站定漂移反馈）
+    ("terrain_preview", 3),  # 前方稀疏高度测量（深度/测距传感器）
     ("leg_joint_pos", 4),    # 关节位置（编码器）
     ("leg_joint_vel", 4),    # 关节速度（编码器差分）
     ("wheel_joint_vel", 2),  # 轮速（C620 回传 rpm）
-    ("command", 5),          # vx, vy, yaw_rate, 腿长, 跳跃
+    ("command", 5),          # vx, vy, yaw_rate, 离地高度目标, 跳跃
     ("previous_action", 6),   # = ACTION_DIM，对齐开源 actions 通道
-    ("phase", 2),            # 相位时钟 sin/cos
-    ("mode_onehot", 5),      # normal / airborne / stair / recover / jump
 )
 
 PRIV_OBS_BLOCKS: tuple[tuple[str, int], ...] = (
-    ("base_lin_vel", 3),     # 机体系线速度（实机需状态估计）
-    ("base_pos_rel", 2),     # 相对出发点位移（实机需里程计）
+    ("base_lin_vel_true", 3),  # 精确仿真机体系线速度（critic 特权）
+    ("base_pos_rel_true", 2),  # 精确仿真相对位移（critic 特权）
     ("leg_length", 4),       # 腿长 + 变化率（可由关节角推出，故不进 actor）
     ("wheel_contact_force", 2),  # 轮法向力（实机无力传感器）
     ("contact_flag", 4),         # 轮接地×2 / 机身触地 / 腾空
@@ -247,10 +255,14 @@ OBS_BLOCKS: tuple[tuple[str, int], ...] = ACTOR_OBS_BLOCKS + PRIV_OBS_BLOCKS
 # --------------------------------------------------------------------------
 OBS_SCALE: dict[str, object] = {
     "gravity": 1.0,                 # 已是单位向量
-    "yaw": 1.0,                     # rad，有界
     "base_ang_vel": 0.25,           # 对齐开源 ang_vel
-    "base_lin_vel": 2.0,            # 对齐开源 lin_vel（仅 critic）
-    "base_pos_rel": 1.0,            # m，±0.6 有界（仅 critic）
+    "heading_error_sincos": 1.0,    # 单位圆上的相对航向编码
+    "base_lin_vel": 2.0,            # 对齐开源 lin_vel（actor 状态估计）
+    "base_lin_vel_true": 2.0,       # 精确仿真值（critic）
+    "base_height_rel": 5.0,         # 对齐开源 height measurements
+    "base_pos_rel": 1.0,            # 相对起点里程计，m
+    "base_pos_rel_true": 1.0,       # 精确仿真值（critic）
+    "terrain_preview": 5.0,         # 前方高度测量，m
     "leg_joint_pos": 1.0,           # 对齐开源 dof_pos
     "leg_joint_vel": 0.05,          # 对齐开源 dof_vel
     "wheel_joint_vel": 0.05,        # 同 dof_vel：60 rad/s → 3.0
@@ -265,21 +277,38 @@ OBS_SCALE: dict[str, object] = {
     "dof_acc": 0.0025,              # 对齐开源 dof_acc（仅 critic）
     "torques": 0.05,                # 对齐开源 torque（仅 critic）
     "domain_params": 1.0,           # 已归一化到 [-1, 1]
-    "phase": 1.0,
-    "mode_onehot": 1.0,
+}
+
+# 记录每个张量块进入策略/critic 前的测量来源，训练 contract 与文档共用。
+# actor 的高度/地形值目前是带噪仿真测量代理，后续需要用真实传感器标定替换。
+OBS_SOURCE: dict[str, str] = {
+    "gravity": "IMU 姿态融合 / 重力方向估计",
+    "base_ang_vel": "机体陀螺仪角速度",
+    "heading_error_sincos": "相对 episode 初始航向的航向估计 sin/cos（当前为 MuJoCo 代理）",
+    "base_lin_vel": "IMU、轮速与里程计融合的机体系速度估计（当前为带噪 MuJoCo 代理）",
+    "base_height_rel": "相对支撑面的向下测距/高度估计（当前为带噪 MuJoCo 代理）",
+    "base_pos_rel": "相对起点的水平里程计估计（当前为带噪 MuJoCo 代理）",
+    "terrain_preview": "前向稀疏深度/测距高度（当前为带噪解析地形代理）",
+    "leg_joint_pos": "腿关节编码器",
+    "leg_joint_vel": "腿关节编码器差分或驱动器速度估计",
+    "wheel_joint_vel": "左右轮编码器/电调速度反馈",
+    "command": "上层速度、高度和跳跃命令",
+    "previous_action": "策略上一控制周期动作缓存",
+    "base_lin_vel_true": "MuJoCo 机体系线速度真值",
+    "base_pos_rel_true": "MuJoCo 相对起点位置真值",
+    "leg_length": "MuJoCo 腿部几何及其控制周期差分",
+    "wheel_contact_force": "MuJoCo 接触法向力",
+    "contact_flag": "MuJoCo 轮/机身接触标签",
+    "terrain_scan": "MuJoCo 解析地形高度扫描",
+    "dof_acc": "MuJoCo 主动关节角加速度估计",
+    "torques": "MuJoCo 执行器输出力矩",
+    "domain_params": "训练 episode 域随机化参数",
 }
 ACTOR_FRAME_DIM = sum(width for _, width in ACTOR_OBS_BLOCKS)   # 单帧 actor 观测
 PRIV_OBS_DIM = sum(width for _, width in PRIV_OBS_BLOCKS)
-# 观测历史堆叠帧数（对齐开源 obs_history_len；1 = 不堆叠）
-OBS_HISTORY = 5
-ACTOR_OBS_DIM = ACTOR_FRAME_DIM * OBS_HISTORY
+# 开源最终采用无历史观测的 MLP；FrameStack5/GRU 只作为对照实验。
+ACTOR_OBS_DIM = ACTOR_FRAME_DIM
 OBS_DIM = ACTOR_OBS_DIM + PRIV_OBS_DIM
-
-OBS_SLICES: dict[str, slice] = {}
-_start = 0
-for _name, _width in OBS_BLOCKS:
-    OBS_SLICES[_name] = slice(_start, _start + _width)
-    _start += _width
 
 # 官方控制周期 = sim.dt(1/60) × decimation(4) = 0.0667 s，我们是 0.008 s。
 # 官方的 dof_acc 是"一个控制周期内的速度差"：直接用 0.008 s 差分，幅值大 8.3 倍、
@@ -307,21 +336,24 @@ def observation_noise_vector(noise: "ObservationNoise") -> dict[str, object]:
     return {
         "gravity": noise.gravity * noise.level,
         "base_ang_vel": noise.ang_vel * noise.level * scale("base_ang_vel"),
+        "heading_error_sincos": noise.heading * noise.level,
+        "base_lin_vel": noise.lin_vel * noise.level * scale("base_lin_vel"),
+        "base_height_rel": noise.height_measurements * noise.level * scale("base_height_rel"),
+        "base_pos_rel": noise.position * noise.level * scale("base_pos_rel"),
+        "terrain_preview": noise.height_measurements * noise.level * scale("terrain_preview"),
         "leg_joint_pos": noise.dof_pos * noise.level * scale("leg_joint_pos"),
         "leg_joint_vel": noise.dof_vel * noise.level * scale("leg_joint_vel"),
         "wheel_joint_vel": noise.dof_vel * noise.level * scale("wheel_joint_vel"),
-        "command": zero,            # 官方 noise_vec[6:8] = 0
-        "previous_action": zero,    # 官方 noise_vec[20:26] = 0
-        "phase": zero,
-        "mode_onehot": zero,
+        "command": zero,            # 控制命令不加传感噪声
+        "previous_action": zero,    # 内部动作缓存不加传感噪声
         # 特权观测（critic）不加噪声
-        "base_lin_vel": zero, "base_pos_rel": zero, "leg_length": zero,
+        "base_lin_vel_true": zero, "base_pos_rel_true": zero, "leg_length": zero,
         "wheel_contact_force": zero, "contact_flag": zero, "terrain_scan": zero,
         "dof_acc": zero, "torques": zero, "domain_params": zero,
     }
 
 # --------------------------------------------------------------------------
-# 动作（固定 10 维）
+# 动作（固定 6 维）
 # --------------------------------------------------------------------------
 # 对齐开源 action_space = 6：4 个腿关节位置 + 2 个轮速目标。
 # 原来的 4 个「腿关节速度前馈」通道已移除（开源没有，且实测贡献很小）。
@@ -331,11 +363,6 @@ ACTION_SPEC: tuple[tuple[str, int, float], ...] = (
     ("hip_position_offset", 4, 0.35),   # rad   —— 4 个主动关节位置偏置（官方 pos_action_scale = 0.35）
 )
 ACTION_DIM = sum(width for _, width, _ in ACTION_SPEC)
-ACTION_SLICES: dict[str, slice] = {}
-_start = 0
-for _name, _width, _ in ACTION_SPEC:
-    ACTION_SLICES[_name] = slice(_start, _start + _width)
-    _start += _width
 
 # --------------------------------------------------------------------------
 # 奖励组（全部实现，权重为 0 即关闭）
@@ -412,10 +439,12 @@ class WheelEscParams:
     力矩常数一律取额定点 0.246 N·m/A，堵转扭矩仅作硬上限。
     """
 
-    # 速度环（输出期望电流）—— 参数待实测标定
-    speed_kp_a_per_rad_s: float = 0.081   # A / (rad/s)
+    # 仿真速度环：满轮速误差 8 rad/s 对应额定持续电流 10 A。
+    # 旧的 0.081 × 5 只允许 0.405 A，轮端力矩不足以平衡机身。
+    # 该增益仍需用实机 C620 电流/转速数据标定，不能直接视作硬件实测值。
+    speed_kp_a_per_rad_s: float = 1.25    # A / (rad/s)
     speed_ki_a_per_rad_s2: float = 0.0
-    speed_error_limit: float = 5.0        # rad/s
+    speed_error_limit: float = 8.0        # rad/s (8 × 1.25 A = 10 A rated current)
     integral_limit_a: float = 8.0
     # 电流 → 输出侧力矩
     torque_per_amp_joint: float = 0.246   # Nm/A（额定点 2.46 Nm / 10 A）
@@ -429,43 +458,6 @@ class WheelEscParams:
     no_load_current_a: float = 0.63       # 空载电流（可作阻力矩）
     efficiency: float = 0.70
     gear_ratio: float = 268.0 / 17.0
-
-
-@dataclass
-class BalanceParams:
-    """轮端外层平衡 + 速度环（输出关节力矩需求，折算成电流叠加到电调）。
-
-    **全部为实测标定值**（单位：关节侧 Nm / (rad, rad/s, m/s)）：
-    ``tau = -kp*(pitch + kd*pitch_rate) - kv*(vx - vx_cmd) + ki*∫(vx_cmd - vx)``
-
-    标定记录（MuJoCo, 2500 步, 稳态速度）::
-
-       目标 vx   +0.15   +0.30   +0.60   -0.15   -0.30   -0.60
-       实测 vx   +0.156  +0.311  +0.625  -0.153  -0.307  -0.613
-
-    ⚠️ 历史教训：旧 v28 外层用的是 ``+ station_kp * x_error``（位置环）。
-    那使“速度指令”退化成位置偏移，稳态 vx≈0，导致速度跟踪奖励与实际行为
-    长期相互抵消 —— 这是平移一直训不好的根因。本版改为**速度环 + 积分**，
-    不再使用位置项。
-    """
-
-    pitch_kp: float = 28.7       # = 1.82 ctrl 单位 × gear 15.7647
-    pitch_kd: float = 0.36       # s
-    body_speed_kp: float = 26.8  # = 1.70 ctrl 单位 × gear
-    body_speed_ki: float = 7.9   # = 0.50 ctrl 单位 × gear
-    integral_limit: float = 30.0 # Nm
-    overspeed_brake_kp: float = 0.0
-    overspeed_margin: float = 0.03
-    # 站定位置环（仅零指令时生效）。符号已实测确认：
-    # 正轮力矩 → 车身加速度 −X，故 x 偏正时需要正力矩把它推回。
-    # 实测（锁死姿态纯平移）：ctrl=+0.30 → Δvx=−1.72 m/s / 0.64 s。
-    station_kp: float = 50.0        # Nm/m（关节侧，负号在控制器里）
-    station_deadband: float = 0.05  # m —— ±5 cm 内不干预
-    station_kd: float = 0.0         # Nm/(m/s)，闭环实测 0 最好
-    # ★ 辅助退火系数：整个手写外环（俯仰 PD + 速度 PI + 站定环）都乘以它。
-    #   1.0 = 全辅助（仅用于把策略"扶起来"），0.0 = 完全靠策略。
-    #   **验收必须在 assist_scale = 0 下进行**，否则等于靠外部控制器维持姿态。
-    assist_scale: float = 1.0
 
 
 @dataclass
@@ -510,6 +502,7 @@ class RewardWeights:
     joint_neutral: float = 0.5
     # --- regularization ---
     action_rate: float = 0.05
+    action_smooth: float = 1.20
     leg_action: float = 0.30
     leg_velocity_action: float = 0.0    # 动作通道已移除
     joint_velocity: float = 0.02
@@ -530,11 +523,25 @@ class RewardWeights:
     track_yaw_square: float = 0.5
     wrong_direction: float = 4.0
     # --- stand still ---
-    station: float = 20.0
-    station_vel: float = 2.0
-    stand_vx: float = 6.0
-    stand_yaw: float = 1.5
-    stand_wheel_speed: float = 0.005
+    station: float = 60.0
+    station_vel: float = 4.0
+    stand_vx: float = 12.0
+    stand_yaw: float = 4.0
+    stand_heading: float = 150.0
+    stand_ang_vel: float = 2.0
+    stand_tilt: float = 100.0
+    stand_wheel_speed: float = 0.02
+    stand_body_contact: float = 12.0
+    # MuJoCo one-step sweep: positive common wheel speed produces positive
+    # pitch acceleration. These terms reward PPO for opposing pitch and rate.
+    stand_balance_action: float = 24.0
+    stand_balance_rate: float = 4.0
+    stand_heading_action: float = 12.0
+    stand_heading_rate: float = 2.0
+    # The negative-pitch replay showed negative mean hip offsets reinforcing
+    # the fall. Penalize only that state/action combination so positive-pitch
+    # recovery and ordinary leg control retain the baseline reward.
+    stand_negative_pitch_hip_action: float = 12.0
     # --- airborne ---
     airborne_upright: float = 2.0
     airborne_leg_retract: float = 1.0
@@ -673,10 +680,9 @@ class OfficialRewards:
 class ObservationNoise:
     """观测噪声（对齐官方 ``noise`` 段：``add_noise=True, noise_level=0.5``）。
 
-    官方做法：噪声加在**归一化之后**的 actor 观测上，均匀分布
+    官方做法：噪声加在**归一化之后**的当前 actor 观测上，均匀分布
     ``±(noise_scales.X × noise_level × obs_scales.X)``；命令与上一帧动作
-    **不加噪声**；特权观测不加噪声；加噪后才推进历史队列
-    （所以 5 帧历史里每帧的噪声独立）。
+    **不加噪声**；特权观测不加噪声。策略不堆叠历史观测帧。
 
     ``noise_scales`` 取自官方基类配置，``noise_level`` 取自 UZ-05 厂商配置。
     """
@@ -684,11 +690,13 @@ class ObservationNoise:
     enabled: bool = True
     level: float = 0.5
     ang_vel: float = 0.2
+    heading: float = 0.01
     gravity: float = 0.05
     dof_pos: float = 0.01
     dof_vel: float = 1.5
     lin_vel: float = 0.1
     height_measurements: float = 0.1
+    position: float = 0.01
     clip_observations: float = 100.0
 
 
@@ -697,7 +705,6 @@ class EnvParams:
     robot: RobotParams = field(default_factory=RobotParams)
     joint: JointActuatorParams = field(default_factory=JointActuatorParams)
     wheel: WheelEscParams = field(default_factory=WheelEscParams)
-    balance: BalanceParams = field(default_factory=BalanceParams)
     rewards: RewardWeights = field(default_factory=RewardWeights)
     official_rewards: OfficialRewards = field(default_factory=OfficialRewards)
     noise: ObservationNoise = field(default_factory=ObservationNoise)
