@@ -151,3 +151,14 @@ examples/*.mp4
 
 # sphinx docs output
 docs/html
+
+# Local Pure PPO reports, logs, and binary checkpoints stay in the workspace.
+/artifacts/pure_ppo_stand_v1/
+/artifacts/pure_ppo_stand_leg_scale_035_v1/
+/runs/pure_ppo_stand_v1/
+/runs/pure_ppo_stand_leg_scale_035_v1/
+/checkpoints/pure_ppo_stand_v1/
+/checkpoints/pure_ppo_stand_leg_scale_035_v1/
+/artifacts/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
+/runs/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
+/checkpoints/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
