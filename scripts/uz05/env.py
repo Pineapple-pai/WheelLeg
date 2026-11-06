@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from copy import deepcopy
 from typing import Any
 
 import gymnasium as gym
@@ -23,6 +24,8 @@ from .spec import (
     STAGE_BY_NAME,
     StageSpec,
     active_rewards,
+    precision_rewards_for_stage,
+    env_params_for_stage,
 )
 
 TERRAIN_SCAN_POINTS = 17
@@ -48,7 +51,7 @@ class UZ05Env(gym.Env):
         if stage not in STAGE_BY_NAME:
             raise ValueError(f"unknown stage {stage!r}; known: {sorted(STAGE_BY_NAME)}")
         self.stage: StageSpec = STAGE_BY_NAME[stage]
-        self.params = params or EnvParams()
+        self.params = params or env_params_for_stage(self.stage)
         self.rng = np.random.default_rng(seed)
         self._observation_encoder = ObservationEncoder(
             self.params.noise, self.params.noise.clip_observations
@@ -64,11 +67,17 @@ class UZ05Env(gym.Env):
 
         terrain = TerrainSpec(kind=self.stage.terrain)
         self.sim = UZ05Model(terrain)
+        if self.stage.motor_substep_control and not np.isclose(
+            self.params.control_dt, self.sim.model.opt.timestep * self.params.robot.control_substeps
+        ):
+            raise ValueError("control_dt must equal timestep * control_substeps")
         # 把环境中的真实执行器参数接入 wheel speed / joint position 驱动模型。
         self.actuators = ActuatorBank(
+            continuous_position=self.stage.continuous_position,
+            wheel_velocity_scale_rad_s=self.stage.wheel_velocity_scale_rad_s,
             robot=self.params.robot,
-            joint=JointPDController(self.params.joint),
-            wheel=WheelEscController(self.params.wheel),
+            joint=JointPDController(deepcopy(self.params.joint)),
+            wheel=WheelEscController(deepcopy(self.params.wheel)),
         )
 
         self.action_space = spaces.Box(-1.0, 1.0, (ACTION_DIM,), np.float32)
@@ -82,8 +91,21 @@ class UZ05Env(gym.Env):
         self.command = np.zeros(5, dtype=np.float64)
         self.command_target = np.zeros(5, dtype=np.float64)
         self.nominal_xy = np.zeros(2, dtype=np.float64)
+        self.hold_xy = np.zeros(2, dtype=np.float64)
+        self.hold_yaw = 0.0
+        self._hold_zero_active = False
+        self._initial_rolling_vx = 0.0
+        self._straight_active = False
+        self.straight_yaw = 0.0
+        self._previous_control = None
+        self._previous_leg_drop = np.zeros(2)
+        self._support_diag = {}
+        self._push_force = np.zeros(3)
+        self._push_remaining = 0
+        self._next_push_step = 0
         self.prev_leg_lengths = self.sim.leg_lengths()
         self.tilt_exceed_steps = 0
+        self.stance_invalid_steps = 0
         self.body_contact_exceed_steps = 0
         self.airborne_prev = 0.0
         self.airborne_steps = 0
@@ -91,6 +113,7 @@ class UZ05Env(gym.Env):
         self.jump_timer = 0.0
         self.last_landing_impact = 0.0
         self._last_reward_terms: dict[str, float] = {}
+        self._tracking_quality = 1.0
         self._station_max_abs = 0.0
         self._yaw_max_abs = 0.0
         self._roll_max_abs = 0.0
@@ -108,6 +131,101 @@ class UZ05Env(gym.Env):
     # ==================================================================
     def _sample_command(self) -> None:
         stage = self.stage
+        if stage.continuous_position:
+            # Fixed mixture from the first reset, independent of training progress.
+            # v8: equal modes; v9: fixed 20/45/15/20 stop/straight/turn/mixed.
+            mode = (int(self.rng.choice(4, p=(.20, .45, .15, .20)))
+                    if stage.straight_tracking else int(self.rng.integers(4)))
+            target = np.zeros(5, dtype=np.float64)
+            target[3] = self.rng.uniform(*stage.base_height_range)
+            if stage.recovery_sampling and self.rng.random() < .40:
+                target[3] = self.rng.uniform(.30, stage.base_height_range[1])
+            if mode in (1, 3):
+                if stage.transition_tracking:
+                    # All speed bands are present from the first reset, no curriculum.
+                    sign = (int(self.rng.choice([-1,1],p=(stage.translation_reverse_probability,
+                                                         1-stage.translation_reverse_probability)))
+                            if stage.responsive_tracking else int(self.rng.choice([-1,1])))
+                    limit = -stage.vx_range[0] if sign < 0 else stage.vx_range[1]
+                    if stage.straight_tracking:
+                        edges=stage.velocity_band_fractions
+                        bands=tuple((a*limit,b*limit) for a,b in zip(edges[:-1],edges[1:]))
+                        band=int(self.rng.choice(len(bands),p=stage.velocity_band_probabilities))
+                    else:
+                        bands = ((0.0, .25 * limit), (.25 * limit, .625 * limit), (.625 * limit, limit))
+                        band = int(self.rng.integers(3))
+                    target[0] = self.rng.uniform(*bands[band]) * sign
+                else:
+                    target[0] = self.rng.uniform(*stage.vx_range)
+            if mode in (2, 3):
+                target[2] = self.rng.uniform(*stage.yaw_range)
+            if stage.transition_tracking and self.steps > 0:
+                change = int(self.rng.integers(4))
+                if change < 2:  # 50% motion-only: expose sag without changing height target.
+                    target[3] = self.command_target[3]
+                elif change == 2:  # 25% height-only, including while translating/turning.
+                    target[:3] = self.command_target[:3]
+            reversal = False
+            if stage.coordinated_tracking and self.steps > 0:
+                # All simple-reward arms keep exactly the v15 command distribution.
+                p = (self.params.precision_centered if stage.simple_reward else
+                     precision_rewards_for_stage(stage, self.params))
+                eligible = abs(self.command_target[0]) > .1 and abs(self.command_target[2]) <= .01
+                if stage.braking_tracking and eligible:
+                    stop_probability = p.stop_command_probability
+                    reversal_probability = p.reversal_command_probability
+                    height_probability = getattr(p,'height_command_probability',0.)
+                    turn_probability = getattr(p,'turn_command_probability',0.)
+                    high_speed = stage.recovery_sampling and abs(self.command_target[0]) >= 1.3
+                    if high_speed:
+                        # Fixed distribution; no training-progress curriculum or action helper.
+                        stop_probability, reversal_probability = ((.40,.35)
+                            if self.command_target[3] >= .30 else (.20,.50))
+                        height_probability, turn_probability = ((.10,.05)
+                            if self.command_target[3] >= .30 else (.15,.05))
+                    event = self.rng.random()
+                    if event < stop_probability:
+                        target[:] = self.command_target
+                        target[:3] = 0.0
+                    elif event < stop_probability + reversal_probability:
+                        target[:] = self.command_target
+                        target[0] *= -1
+                        if (stage.switching_tracking
+                                and self.rng.random() < (0. if high_speed else p.reversal_mid_speed_probability)):
+                            target[0] = np.sign(target[0]) * self.rng.uniform(*p.reversal_mid_speed_range_m_s)
+                        reversal = True
+                    elif (stage.switching_tracking and event < stop_probability
+                          + reversal_probability + height_probability):
+                        target[:] = self.command_target
+                        # Exercise the full height step at the held translation speed.
+                        midpoint = sum(stage.base_height_range) / 2
+                        target[3] = stage.base_height_range[int(target[3] <= midpoint)]
+                    elif (stage.switching_tracking and event < stop_probability
+                          + reversal_probability + height_probability + turn_probability):
+                        target[:] = self.command_target
+                        target[0] = 0.0
+                        target[2] = self.rng.uniform(*stage.yaw_range)
+                elif (eligible
+                        and self.rng.random() < p.reversal_command_probability):
+                    # A sampled user command, never a prescribed posture/action.
+                    target[:] = self.command_target
+                    target[0] *= -1
+                    reversal = True
+            self.command_target = target
+            self.command[:] = target
+            zero_like = bool(np.max(np.abs(target[[0, 2]])) <= 0.01)
+            hold_steps = (stage.zero_command_hold_steps if stage.precision_control
+                          and (mode == 0 or (stage.robust_support and zero_like)) else stage.command_hold_steps)
+            if stage.transition_tracking:
+                hold_steps = stage.zero_command_hold_steps if zero_like else stage.command_hold_steps
+            if reversal:
+                hold_steps = stage.command_hold_steps
+            elif stage.transition_tracking and self.rng.random() < stage.long_command_prob:
+                hold_steps = stage.long_command_hold_steps
+            elif not stage.transition_tracking and stage.robust_support and not zero_like and self.rng.random() < stage.long_command_prob:
+                hold_steps = stage.long_command_hold_steps
+            self.command_steps_left = int(self.rng.integers(*hold_steps))
+            return
         # command[3] = **离地高度目标**（官方 commands[:,2] 口径），不是腿长
         nominal_height = 0.5 * (stage.base_height_range[0] + stage.base_height_range[1])
         if self.rng.random() < stage.zero_command_prob:
@@ -130,6 +248,11 @@ class UZ05Env(gym.Env):
         self.command[3] = target[3]
 
     def _advance_command(self) -> None:
+        if self.stage.continuous_position:
+            if self.command_steps_left <= 0:
+                self._sample_command()
+            self.command_steps_left -= 1
+            return
         dt = self.params.control_dt
         dvx = self.params.robot.command_accel_limit * dt
         self.command[0] = float(np.clip(self.command_target[0] - self.command[0], -dvx, dvx) + self.command[0])
@@ -192,6 +315,15 @@ class UZ05Env(gym.Env):
         # 关节
         self.sim.data.qpos[self.sim.hip_qpos_adr] = self.rng.uniform(-0.05, 0.05, 4)
         self.sim.data.qvel[self.sim.hip_dof_adr] = self.rng.uniform(-0.2, 0.2, 4)
+        self._initial_rolling_vx = 0.0
+        if stage.moving_start_probability > 0 and self.rng.random() < stage.moving_start_probability:
+            sign=int(self.rng.choice([-1,1],p=(stage.translation_reverse_probability,
+                                             1-stage.translation_reverse_probability)))
+            self._initial_rolling_vx=float(self.rng.uniform(*stage.moving_start_speed_range))*sign
+            # Initial state only: a freely moving base and consistent wheel spin.
+            # No reference action, force, or pose is supplied after reset.
+            self.sim.data.qvel[:3]=Rotation.from_quat(quat).apply([self._initial_rolling_vx,0.,0.])
+            self.sim.data.qvel[self.sim.wheel_dof_adr]=-self._initial_rolling_vx/self.sim.wheel_radius
         # ---- 域随机化：每 episode 采样一次，整局不变 ----
         dr = self.params.domain_randomization
         if dr.enabled:
@@ -206,10 +338,45 @@ class UZ05Env(gym.Env):
                 self.params.wheel.speed_kp_a_per_rad_s * self.domain["wheel_speed_gain_scale"][0]
             )
         else:
+            self.actuators.joint.params.kp = self.params.joint.kp
+            self.actuators.joint.params.kd = self.params.joint.kd
+            self.actuators.wheel.params.torque_per_amp_joint = self.params.wheel.torque_per_amp_joint
+            self.actuators.wheel.params.speed_kp_a_per_rad_s = self.params.wheel.speed_kp_a_per_rad_s
             self.domain = {name: (0.0, 0.0) for name in dr.PARAM_NAMES}
             self.sim.apply_randomization(self._nominal_model, {k: (1.0 if "scale" in k else 0.0, 0.0)
                                                               for k in dr.PARAM_NAMES})
         self.sim.forward()
+
+        self.reset_projection_info = {'enabled': self.params.robot.closed_chain_reset,
+                                      'resamples': 0, 'iterations': 0, 'rejections': []}
+        if self.params.robot.closed_chain_reset:
+            from .reset_projection import ProjectionError
+            attempts = self.params.robot.reset_projection_attempts
+            if attempts < 1:
+                raise ValueError('reset_projection_attempts must be positive')
+            for attempt in range(attempts):
+                try:
+                    result = self.sim.reset_projector.project(self.sim.data)
+                    geometry = self.sim.wheel_stance()
+                    if any(not .15 < geometry[f'leg_drop_{side}_m'] < .34
+                           or abs(geometry[f'wheel_fore_aft_{side}_m']) > .10
+                           for side in ('left', 'right')):
+                        raise ProjectionError('invalid local wheel-leg assembly')
+                    # Robust stages deliberately start clear of terrain. Legacy
+                    # low-height stages retain their original ground placement.
+                    if self.stage.robust_support:
+                        for c in self.sim.data.contact:
+                            if c.dist < -1e-5:
+                                raise ProjectionError(f'initial penetration {c.dist:g} m')
+                    self.reset_projection_info.update(result, resamples=attempt)
+                    break
+                except ProjectionError as exc:
+                    self.reset_projection_info['rejections'].append(str(exc))
+                    if attempt + 1 == attempts:
+                        raise RuntimeError(f'closed-chain reset failed after {attempts} attempts: {exc}') from exc
+                    self.sim.data.qpos[self.sim.hip_qpos_adr] = self.rng.uniform(-.05, .05, 4)
+                    self.sim.data.qvel[self.sim.hip_dof_adr] = self.rng.uniform(-.2, .2, 4)
+                    self.sim.data.qvel[self.sim.reset_projector.dofs] = 0.
 
         self.nominal_xy = self.sim.data.qpos[:2].copy()
         reset_quat = self.sim.base_quat
@@ -217,6 +384,12 @@ class UZ05Env(gym.Env):
             reset_quat[1], reset_quat[2], reset_quat[3], reset_quat[0]
         ])
         self.nominal_yaw = float(reset_rot.as_euler("xyz")[2])
+        self.hold_xy = self.nominal_xy.copy()
+        self.hold_yaw = self.nominal_yaw
+        self._hold_zero_active = False
+        self._straight_active = False
+        self.straight_yaw = self.nominal_yaw
+        self._previous_control = None
         self.steps = 0
         self.previous_action[:] = 0.0
         self.prev_leg_lengths = self.sim.leg_lengths()
@@ -229,6 +402,7 @@ class UZ05Env(gym.Env):
         self._last_leg_torque = np.zeros(4, dtype=np.float64)            # 上一步关节力矩
         self._last_wheel_torque = np.zeros(2, dtype=np.float64)
         self.tilt_exceed_steps = 0
+        self.stance_invalid_steps = 0
         self.body_contact_exceed_steps = 0
         self.airborne_prev = 0.0
         self.airborne_steps = 0
@@ -243,7 +417,13 @@ class UZ05Env(gym.Env):
         self._ang_vel_samples = 0
         self._station_window: deque = deque(maxlen=200)   # 末段稳态漂移窗口
         self.actuators.reset()
-        _, _, _, airborne_now = self.sim.contact_state()
+        geometry = self.sim.wheel_stance()
+        self._previous_leg_drop = np.array([geometry["leg_drop_left_m"], geometry["leg_drop_right_m"]])
+        self._push_force[:] = 0.0
+        self._push_remaining = 0
+        self._next_push_step = (int(self.rng.integers(*self.params.robust.push_interval_steps))
+                                if self.params.robust.pushes_enabled else 0)
+        _, _, _, airborne_now = self.sim.contact_state(terrain_only=self.stage.robust_support)
         self.airborne_prev = airborne_now
         self._sample_command()
         return self._obs(), {}
@@ -251,7 +431,8 @@ class UZ05Env(gym.Env):
     # ==================================================================
     # 观测状态收集；打包、缩放和加噪由 observations.py 负责
     # ==================================================================
-    def _obs(self) -> np.ndarray:
+    def _obs(self, current_action: np.ndarray | None = None) -> np.ndarray:
+        self._sync_hold_reference()
         sim = self.sim
         quat = sim.base_quat
         rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
@@ -260,7 +441,13 @@ class UZ05Env(gym.Env):
         ang_vel_body = sim.body_frame(sim.base_ang_vel_world)
         leg_lengths = sim.leg_lengths()
         leg_rate = (leg_lengths - self.prev_leg_lengths) / self.params.control_dt
-        wheel_force, wheel_hit, body_hit, airborne = sim.contact_state()
+        support = sim.wheel_stance()
+        drop = np.array([support["leg_drop_left_m"], support["leg_drop_right_m"]])
+        drop_rate = (drop - self._previous_leg_drop) / self.params.control_dt
+        self._support_diag = {**support, **sim.leg_envelope(), **sim.wheel_axle_geometry(),
+                              **sim.support_posture(),
+                              "leg_differential_velocity_m_s": float(drop_rate[0] - drop_rate[1])}
+        wheel_force, wheel_hit, body_hit, airborne = sim.contact_state(terrain_only=self.stage.robust_support)
         base_x = float(sim.base_pos[0])
         base_height_rel = float(sim.base_pos[2] - sim.support_height(base_x, float(sim.base_pos[1])))
         yaw = float(rot.as_euler("xyz")[2])
@@ -287,13 +474,16 @@ class UZ05Env(gym.Env):
             "heading_error_sincos": np.array([np.sin(yaw_error), np.cos(yaw_error)]),
             "base_lin_vel": lin_vel_body,
             "base_height_rel": np.array([base_height_rel], dtype=np.float64),
-            "base_pos_rel": sim.data.qpos[:2] - self.nominal_xy,
+            "base_pos_rel": sim.data.qpos[:2] - self._position_reference(),
             "terrain_preview": terrain_preview,
-            "leg_joint_pos": sim.joint_positions(),
+            "leg_joint_pos": (
+                np.arctan2(np.sin(sim.joint_positions()), np.cos(sim.joint_positions()))
+                if self.stage.continuous_position else sim.joint_positions()
+            ),
             "leg_joint_vel": sim.joint_velocities(),
             "wheel_joint_vel": sim.wheel_velocities(),
             "command": self.command,
-            "previous_action": self.previous_action,
+            "previous_action": self.previous_action if current_action is None else current_action,
             "leg_length": np.concatenate([leg_lengths, leg_rate]),
             "wheel_contact_force": wheel_force,
             "contact_flag": np.concatenate([wheel_hit, [body_hit, airborne]]),
@@ -308,20 +498,52 @@ class UZ05Env(gym.Env):
             # critic receives exact simulator values; actor counterparts above
             # go through the sensor noise model in ObservationEncoder.
             "base_lin_vel_true": lin_vel_body,
-            "base_pos_rel_true": sim.data.qpos[:2] - self.nominal_xy,
+            "base_pos_rel_true": sim.data.qpos[:2] - self._position_reference(),
         }
         observation, self._raw_cache, self._obs_cache = self._observation_encoder.encode(
             blocks, self.rng
         )
         return observation
 
+    def _sync_hold_reference(self) -> None:
+        if not self.stage.precision_control:
+            return
+        if self.stage.straight_tracking:
+            # Capture once on entry to straight translation. Speed reversal and
+            # height changes keep it; after a turn/stop capture the new heading.
+            straight = self.command_active and abs(self.command[2]) <= 0.01
+            if straight and not self._straight_active:
+                q = self.sim.base_quat
+                self.straight_yaw = float(Rotation.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")[2])
+            self._straight_active = bool(straight)
+        zero = not self.command_active
+        if zero and not self._hold_zero_active:
+            self.hold_xy = self.sim.base_pos[:2].copy()
+            q = self.sim.base_quat
+            self.hold_yaw = float(Rotation.from_quat([q[1], q[2], q[3], q[0]]).as_euler("xyz")[2])
+        # Repeated stop commands and height changes do not move this reference.
+        self._hold_zero_active = zero
+
+    def _position_reference(self) -> np.ndarray:
+        if self.stage.robust_support and self.command_active:
+            # Velocity tracking must not depend on accumulated episode position.
+            return self.sim.base_pos[:2].copy()
+        return self.hold_xy if self.stage.precision_control and self._hold_zero_active else self.nominal_xy
+
     def _heading_error(self, yaw: float | None = None) -> float:
-        """Wrapped heading error relative to the robot's reset heading."""
+        """Wrapped heading error against the stage's hold/straight reference."""
+        if self.stage.robust_support and self.command_active and not (
+                self.stage.straight_tracking and abs(self.command[2]) <= 0.01):
+            return 0.0
         if yaw is None:
             quat = self.sim.base_quat
             rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
             yaw = float(rot.as_euler("xyz")[2])
-        delta = float(yaw) - float(getattr(self, "nominal_yaw", 0.0))
+        reference = (self.straight_yaw if self.stage.straight_tracking and self.command_active
+                     and abs(self.command[2]) <= 0.01 else
+                     self.hold_yaw if self.stage.precision_control and self._hold_zero_active
+                     else float(getattr(self, "nominal_yaw", 0.0)))
+        delta = float(yaw) - reference
         return float(np.arctan2(np.sin(delta), np.cos(delta)))
 
     def _diagnostic_mode(self, airborne: float, base_x: float) -> str:
@@ -341,10 +563,28 @@ class UZ05Env(gym.Env):
     # ==================================================================
     # 步进
     # ==================================================================
+    def _prepare_push(self):
+        p = self.params.robust
+        if not p.pushes_enabled:
+            self._push_force[:] = 0.0
+            self._push_remaining = 0
+            return
+        if self._push_remaining == 0 and self.steps >= self._next_push_step:
+            angle = float(self.rng.uniform(-np.pi, np.pi))
+            magnitude = float(self.rng.uniform(*p.push_force_n))
+            self._push_force[:] = [magnitude * np.cos(angle), magnitude * np.sin(angle), 0.0]
+            self._push_remaining = int(self.rng.integers(*p.push_duration_steps))
+            self._next_push_step = self.steps + int(self.rng.integers(*p.push_interval_steps))
+        if self._push_remaining > 0:
+            self._push_remaining -= 1
+        else:
+            self._push_force[:] = 0.0
+
     def step(self, action):
         sim = self.sim
         action = np.clip(np.asarray(action, dtype=np.float64), -1.0, 1.0)
         self._advance_command()
+        self._sync_hold_reference()
 
         quat = self.sim.base_quat
         rot = Rotation.from_quat([quat[1], quat[2], quat[3], quat[0]])
@@ -367,14 +607,47 @@ class UZ05Env(gym.Env):
             "station_error": station_error,
             "command_active": self.command_active,
         }
-        control = self.actuators.compute(action, state=state, dt=self.params.control_dt)
-        self.sim.data.ctrl[:4] = control["leg_ctrl"]
-        self.sim.data.ctrl[4:] = control["wheel_ctrl"]
-        # 记录本步下发的实际力矩（官方特权观测 torques）
+        self._prepare_push()
+        motor_controls = []
+        wheel_velocity_samples = [sim.wheel_velocities().copy()] if self.stage.pitch_control else []
+        for substep in range(self.params.robot.control_substeps):
+            if substep == 0 or self.stage.motor_substep_control:
+                motor_state = state
+                dt = self.params.control_dt
+                if self.stage.motor_substep_control:
+                    motor_state = {**state, "joint_pos": sim.joint_positions(),
+                                   "joint_vel": sim.joint_velocities(), "wheel_vel": sim.wheel_velocities()}
+                    dt = float(sim.model.opt.timestep)
+                control = self.actuators.compute(action, state=motor_state, dt=dt)
+                sim.data.ctrl[sim.hip_actuator_ids] = control["leg_ctrl"]
+                sim.data.ctrl[sim.wheel_actuator_ids] = control["wheel_ctrl"]
+                motor_controls.append(control)
+            # Scheduled pushes are external disturbances, never restoring forces.
+            sim.data.xfrc_applied[sim.chassis_body, :3] += self._push_force
+            try:
+                sim.step()
+            finally:
+                sim.data.xfrc_applied[sim.chassis_body, :3] -= self._push_force
+            if self.stage.pitch_control:
+                wheel_velocity_samples.append(sim.wheel_velocities().copy())
+        if self.stage.motor_substep_control:
+            # mj_step integrates qpos last; refresh sites/IMU/contact proxies at
+            # that new state before building the policy observation.
+            sim.data.xfrc_applied[sim.chassis_body, :3] += self._push_force
+            try:
+                sim.forward()
+            finally:
+                sim.data.xfrc_applied[sim.chassis_body, :3] -= self._push_force
         self._last_leg_torque = np.asarray(control["leg_torque"], dtype=np.float64).copy()
         self._last_wheel_torque = np.asarray(control["wheel_torque"], dtype=np.float64).copy()
-        for _ in range(self.params.robot.control_substeps):
-            self.sim.step()
+        if self.stage.motor_substep_control:
+            # Do not hide within-cycle saturation or sign changes by averaging torque.
+            control = dict(control)
+            control["motor_leg_torque_samples"] = np.stack([v["leg_torque"] for v in motor_controls])
+            control["motor_wheel_current_samples"] = np.stack([v["wheel_current"] for v in motor_controls])
+            control["motor_leg_demand_samples"] = np.stack([v["leg_torque_demand"] for v in motor_controls])
+        if self.stage.pitch_control:
+            control["wheel_acceleration_samples"] = np.diff(wheel_velocity_samples, axis=0) / float(sim.model.opt.timestep)
 
         self.steps += 1
         self._station_max_abs = max(
@@ -402,16 +675,36 @@ class UZ05Env(gym.Env):
         self._dof_vel_hist.append(
             np.concatenate([self.sim.joint_velocities(), self.sim.wheel_velocities()])
         )
-        obs = self._obs()
+        obs = self._obs(current_action=action)
         terminated, truncated, reasons = self._termination()
         reward, terms = self._reward(control, state, action, terminated)
+        output_metrics = self._output_metrics(control)
+        self._previous_control = {key: np.asarray(value).copy() for key, value in control.items()}
         self.prev_action_prev = self.previous_action.copy()
         self.previous_action = action
         self.prev_leg_lengths = self.sim.leg_lengths()
+        self._previous_leg_drop = np.array([self._support_diag["leg_drop_left_m"], self._support_diag["leg_drop_right_m"]])
 
         self._last_reward_terms = terms
         self._info = {
+            **self._support_diag,
+            "push_force_n": float(np.linalg.norm(self._push_force)),
+            "wheel_dual_support": float(np.all(self._raw_cache["contact_flag"][:2] > 0.5)),
+            **output_metrics,
+            "wheel_acceleration_sq": float(np.square(control["wheel_acceleration_samples"]).mean()) if self.stage.pitch_control else 0.0,
+            "joint_torque_applied": control["leg_torque"].copy(),
+            "joint_saturation_per_joint": np.mean(np.abs(self._effort_samples(control)[:, :4]) >= .99, axis=0),
+            "zero_command": float(not self.command_active),
+            "hold_planar_error_m": (float(np.linalg.norm(sim.base_pos[:2] - self._position_reference()))
+                                    if not self.command_active else 0.0),
+            "hold_heading_error_rad": abs(self._heading_error()) if not self.command_active else 0.0,
+            "tracking_vx_error": float(sim.body_frame(sim.base_lin_vel_world)[0] - self.command[0]),
+            "tracking_yaw_error": float(post_ang_vel_body[2] - self.command[2]),
+            "tracking_height_error": float(self._raw_cache["base_height_rel"][0] - self.command[3]),
+            "command_height": float(self.command[3]),
             "reward_terms": terms,
+            "tracking_pose_quality": self._tracking_quality,
+            "initial_rolling_vx": self._initial_rolling_vx,
             "reward_unattributed": 0.0,
             "termination_reason": reasons,
             # 域随机化：原始值，供日志/复盘（critic 看到的是归一化版）
@@ -429,6 +722,7 @@ class UZ05Env(gym.Env):
             "pitch_max_abs": self._pitch_max_abs,
             "yaw_error": yaw_error,
             "yaw_error_abs": abs(yaw_error),
+            "straight_heading_active": self.stage.straight_tracking and self._straight_active,
             "yaw_max_abs": self._yaw_max_abs,
             "roll_rate": float(post_ang_vel_body[0]),
             "pitch_rate": float(post_ang_vel_body[1]),
@@ -505,8 +799,196 @@ class UZ05Env(gym.Env):
         q = np.asarray(joint_pos, dtype=np.float64)
         return float(np.sum(np.maximum(0.0, -limit - q)) + np.sum(np.maximum(0.0, q - limit)))
 
+    @staticmethod
+    def _robust_square(x):
+        """Quadratic near zero, linear for large errors; never clips away gradients."""
+        x = np.abs(np.asarray(x, dtype=np.float64))
+        return np.where(x <= 1.0, x * x, 2.0 * x - 1.0)
+
+    def _normalized_effort(self, control):
+        return np.concatenate([
+            control["leg_torque"] / self.params.joint.torque_limit,
+            control["wheel_current"] / self.params.wheel.current_limit_a,
+        ])
+
+    def _effort_samples(self, control):
+        if "motor_leg_torque_samples" in control:
+            return np.concatenate([control["motor_leg_torque_samples"] / self.params.joint.torque_limit,
+                                   control["motor_wheel_current_samples"] / self.params.wheel.current_limit_a], axis=1)
+        return self._normalized_effort(control)[None, :]
+
+    def _effort_deltas(self, control):
+        samples = self._effort_samples(control)
+        if self._previous_control is not None:
+            samples = np.vstack([self._normalized_effort(self._previous_control), samples])
+        return np.diff(samples, axis=0) if len(samples) > 1 else np.zeros((1, 6))
+
+    def _output_metrics(self, control):
+        old = self._previous_control
+        wheel_delta = control["wheel_target"] - old["wheel_target"] if old is not None else np.zeros(2)
+        joint_delta = control["joint_target"] - old["joint_target"] if old is not None else np.zeros(4)
+        joint_delta = np.arctan2(np.sin(joint_delta), np.cos(joint_delta))
+        effort_delta = self._effort_deltas(control)
+        effort_samples = self._effort_samples(control)
+        return {
+            "wheel_target_change_sq": float(np.square(wheel_delta).mean()),
+            "joint_target_change_sq": float(np.square(joint_delta).mean()),
+            "effort_change_sq": float(np.square(effort_delta).mean()),
+            "joint_saturation_fraction": float(np.mean(np.abs(effort_samples[:, :4]) >= .99)),
+            "wheel_saturation_fraction": float(np.mean(np.abs(effort_samples[:, 4:]) >= .99)),
+        }
+
+    def _precision_terms(self, control):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        terms = {"hold_position": 0.0, "hold_heading": 0.0,
+                 "wheel_target_change": 0.0, "joint_target_change": 0.0, "effort_change": 0.0}
+        if not self.command_active:
+            error = float(np.linalg.norm(self.sim.base_pos[:2] - self.hold_xy))
+            terms["hold_position"] = -p.hold_position * float(self._robust_square(
+                max(0.0, error - p.hold_position_deadband_m) / p.hold_position_scale_m))
+            if self.stage.braking_tracking:
+                # Same fixed anchor and local gradient; bound the far-field cost
+                # so unavoidable braking distance cannot dominate survival/tracking.
+                cap = p.hold_position_cost_cap
+                terms["hold_position"] = cap * float(np.tanh(terms["hold_position"] / cap))
+            terms["hold_heading"] = -p.hold_heading * float(self._robust_square(
+                self._heading_error() / p.hold_heading_scale_rad))
+        terms["effort"] = -p.effort * float(np.square(self._effort_samples(control)).mean())
+        # The pre-clamp joint PD request preserves a learning signal above saturation.
+        demand = np.concatenate([
+            np.abs(control.get("motor_leg_demand_samples", control["leg_torque_demand"][None, :])) / self.params.joint.torque_limit,
+            np.abs(control.get("motor_wheel_current_samples", control["wheel_current"][None, :])) / self.params.wheel.current_limit_a,
+        ], axis=1)
+        excess = np.maximum(0.0, demand - p.saturation_soft_fraction) / p.saturation_scale_fraction
+        terms["saturation"] = -p.saturation * float(self._robust_square(excess).mean())
+        if self._previous_control is not None:
+            old = self._previous_control
+            wheel_delta = (control["wheel_target"] - old["wheel_target"]) / p.wheel_target_change_scale_rad_s
+            joint_delta = control["joint_target"] - old["joint_target"]
+            joint_delta = np.arctan2(np.sin(joint_delta), np.cos(joint_delta)) / p.joint_target_change_scale_rad
+            terms["wheel_target_change"] = -p.wheel_target_change * float(self._robust_square(wheel_delta).mean())
+            terms["joint_target_change"] = -p.joint_target_change * float(self._robust_square(joint_delta).mean())
+            terms["effort_change"] = -p.effort_change * float(np.square(self._effort_deltas(control)).mean())
+        if self.stage.motor_substep_control:
+            terms["effort_change"] = -p.effort_change * float(np.square(self._effort_deltas(control)).mean())
+        if self.stage.pitch_control:
+            terms["wheel_acceleration"] = -p.wheel_acceleration * float(self._robust_square(
+                control["wheel_acceleration_samples"] / p.wheel_acceleration_scale_rad_s2).mean())
+        return terms
+
+    def _pitch_terms(self, roll: float, pitch: float) -> dict[str, float]:
+        p = precision_rewards_for_stage(self.stage, self.params)
+        # Split the old 3-point upright budget: roll 1, pitch 2 at zero.
+        # A smooth near-zero bonus plus symmetric cost, no hard angle/action clamp.
+        weight = self.stage.tracking_upright_weight
+        excess = max(0.0, abs(pitch) - p.pitch_deadband_rad) / p.pitch_error_scale_rad
+        return {
+            "upright": weight / 3.0 * float(np.exp(-(roll / p.roll_sigma_rad)**2)),
+            "pitch_alignment": weight * 2.0 / 3.0 * float(np.exp(-(pitch / p.pitch_sigma_rad)**2)),
+            "pitch_error": -p.pitch_error * float(self._robust_square(excess)),
+        }
+
+    def _symmetry_terms(self, leg_lengths, fore_aft_left: float,
+                        fore_aft_right: float, roll: float) -> dict[str, float]:
+        p = precision_rewards_for_stage(self.stage, self.params)
+        def cost(error, deadband, scale, weight):
+            return -weight * float(self._robust_square(max(0.0, abs(error) - deadband) / scale))
+        return {
+            "leg_length_difference": cost(leg_lengths[0] - leg_lengths[1], p.leg_length_deadband_m,
+                                          p.leg_length_scale_m, p.leg_length_difference),
+            "fore_aft_difference": cost(fore_aft_left - fore_aft_right, p.fore_aft_deadband_m,
+                                       p.fore_aft_scale_m, p.fore_aft_difference),
+            "roll_error": cost(roll, p.roll_deadband_rad, p.roll_error_scale_rad, p.roll_error),
+        }
+
+    def _transition_terms(self, height_error: float, vx_error: float, pitch_rate: float):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        return {
+            "height_shortfall": -p.height_shortfall * float(self._robust_square(
+                max(0.0, -height_error - p.height_shortfall_deadband_m) / p.height_shortfall_scale_m)),
+            "vx_error_dense": -p.vx_error_dense * float(self._robust_square(vx_error / p.vx_error_scale_m_s)),
+            "pitch_rate": -p.pitch_rate * float(self._robust_square(pitch_rate / p.pitch_rate_scale_rad_s)),
+        }
+
+    def _straight_terms(self, vx_error, yaw_error, vertical_velocity, leg_common_rate):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        straight = self.command_active and abs(self.command[2]) <= 0.01
+        return {
+            "track_vx_coarse": p.vx_coarse_bonus * float(np.exp(-(vx_error / p.vx_coarse_sigma_m_s)**2)),
+            "yaw_error_dense": -p.yaw_error_dense * float(self._robust_square(yaw_error / p.yaw_error_scale_rad_s)),
+            "straight_heading": (-p.straight_heading * float(self._robust_square(
+                self._heading_error() / p.straight_heading_scale_rad)) if straight else 0.0),
+            "motion_vertical_velocity": (-p.motion_vertical_velocity * float(self._robust_square(
+                vertical_velocity / p.motion_vertical_velocity_scale_m_s)) if self.command_active else 0.0),
+            "leg_common_velocity": -p.leg_common_velocity * float(self._robust_square(
+                leg_common_rate / p.leg_common_velocity_scale_m_s)),
+        }
+
+    def _tracking_pose_quality(self, height_error, pitch):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        severity = ((height_error / p.tracking_height_sigma_m)**2
+                    + (pitch / p.tracking_pitch_sigma_rad)**2)
+        return float(p.tracking_pose_floor + (1-p.tracking_pose_floor)*np.exp(-.5*severity))
+
+    def _leg_reach_terms(self, envelope):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        terms = {}
+        for direction, limit in (('forward',p.leg_forward_reach_soft_m),
+                                 ('backward',p.leg_backward_reach_soft_m)):
+            reach = np.array([envelope[f'leg_{direction}_reach_{side}_m'] for side in ('left','right')])
+            excess = np.maximum(0.,reach-limit)/p.leg_reach_scale_m
+            terms[f'leg_{direction}_reach'] = -p.leg_reach_cost*float(self._robust_square(excess).mean())
+        return terms
+
+    def _centered_support_terms(self, geometry):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        offsets = np.array([geometry[f'wheel_fore_aft_{side}_m'] for side in ('left', 'right')])
+        excess = np.maximum(0., np.abs(offsets) - p.wheel_fore_aft_deadband_m) / p.wheel_fore_aft_scale_m
+        # Cost each side before averaging: equal or opposite offsets cannot cancel.
+        return {'wheel_fore_aft_alignment': -p.wheel_fore_aft_alignment
+                * float(self._robust_square(excess).mean())}
+
+    def _aligned_support_terms(self, geometry, control):
+        p = precision_rewards_for_stage(self.stage, self.params)
+        excess = max(0., geometry['axle_line_offset_m'] - p.axle_offset_deadband_m) / p.axle_offset_scale_m
+        terms = {'wheel_axle_alignment': -p.axle_alignment * float(self._robust_square(excess)),
+                 'paired_joint_target_alignment': 0.0}
+        # The mirrored MJCF uses the same signed axes for corresponding joints.
+        # Weak command cost only in stand/straight motion; actual axle cost is primary.
+        if abs(self.command[2]) <= .01:
+            target = control['joint_target']
+            delta = target[:2] - target[2:]
+            delta = np.arctan2(np.sin(delta), np.cos(delta))
+            excess = np.maximum(0., np.abs(delta) - p.paired_target_deadband_rad) / p.paired_target_scale_rad
+            terms['paired_joint_target_alignment'] = -p.paired_target_alignment * float(self._robust_square(excess).mean())
+        return terms
+
+    def _simple_reward(self, control, action, terminated, stage=None):
+        from .simple_rewards import tracking_terms
+        stage = stage or self.stage
+        sim = self.sim
+        rpy = Rotation.from_quat([sim.base_quat[1],sim.base_quat[2],sim.base_quat[3],sim.base_quat[0]]).as_euler('xyz')
+        delta = np.asarray(action)-self.previous_action
+        delta[2:] = np.arctan2(np.sin(np.pi*delta[2:]),np.cos(np.pi*delta[2:]))/np.pi
+        heading = self._heading_error() if abs(self.command[2]) <= .01 else 0.
+        stop_distance = float(np.linalg.norm(sim.base_pos[:2]-self.hold_xy)) if not self.command_active else 0.
+        pitch_error = (self._support_diag['support_pitch_error_rad']
+                       if stage.simple_pitch_reference == 'support' else float(rpy[1]))
+        height = float(self._raw_cache['base_height_rel'][0])
+        self._tracking_quality = 1.0  # No posture/geometry multiplication of task reward.
+        return tracking_terms(precision_rewards_for_stage(stage,self.params),
+            vx_error=float(sim.body_frame(sim.base_lin_vel_world)[0]-self.command[0]),
+            yaw_rate_error=float(sim.body_frame(sim.base_ang_vel_world)[2]-self.command[2]),
+            height_error=height-self.command[3],roll=float(rpy[0]),pitch_error=pitch_error,
+            heading_error=heading,stop_distance=stop_distance,action_delta=delta,
+            terminated=terminated,axle_offset=self._support_diag['axle_line_offset_m'],
+            axle_enabled=stage.simple_axle_cost,dt=self.params.control_dt)
+
     def _reward(self, control: dict, state: dict, action: np.ndarray,
                 terminated: bool) -> tuple[float, dict[str, float]]:
+        if self.stage.simple_reward:
+            terms = self._simple_reward(control, action, terminated)
+            return float(sum(terms.values())), terms
         w = self.params.rewards
         flags = self.reward_flags
         sim = self.sim
@@ -516,6 +998,8 @@ class UZ05Env(gym.Env):
             [sim.base_quat[1], sim.base_quat[2], sim.base_quat[3], sim.base_quat[0]]
         ).as_euler("xyz")
         roll, pitch = float(rpy[0]), float(rpy[1])
+        pitch_objective_error = (self._support_diag['support_pitch_error_rad']
+                                 if self.stage.aligned_support else pitch)
         tilt_sq = roll * roll + pitch * pitch
 
         lin_vel_body = sim.body_frame(sim.base_lin_vel_world)
@@ -533,10 +1017,103 @@ class UZ05Env(gym.Env):
         height_error = base_height_rel - float(self.command[3])
         leg_error = leg_mean - float(self.params.robot.nominal_leg_length)
         station_error = float(sim.data.qpos[0] - self.nominal_xy[0])
-        wheel_force, wheel_hit, body_hit, airborne = sim.contact_state()
+        wheel_force, wheel_hit, body_hit, airborne = sim.contact_state(terrain_only=self.stage.robust_support)
 
         joint_pos = state["joint_pos"]
         joint_vel = state["joint_vel"]
+
+        if self.stage.continuous_position:
+            # The same continuous tracking objective includes zero velocities.
+            # No action sign or minimum motion is prescribed. v16 adds a weak
+            # paired-target cost while keeping all six actions independent.
+            upright = float(np.exp(-tilt_sq / 0.12))
+            action_delta = action - self.previous_action
+            action_delta[2:] = np.arctan2(
+                np.sin(np.pi * action_delta[2:]), np.cos(np.pi * action_delta[2:])
+            ) / np.pi
+            normalized_efforts = np.concatenate([
+                control["leg_torque"] / self.params.joint.torque_limit,
+                control["wheel_torque"] / self.params.wheel.joint_torque_limit,
+            ])
+            terms = {
+                "upright": self.stage.tracking_upright_weight * upright,
+                "track_vx": self.stage.tracking_vx_weight * float(np.exp(-((vx - self.command[0]) / self.stage.tracking_vx_sigma) ** 2)),
+                "track_yaw": self.stage.tracking_yaw_weight * float(np.exp(-((yaw_rate - self.command[2]) / 0.5) ** 2)),
+                "track_height": self.stage.tracking_height_weight * float(np.exp(-(height_error / 0.025) ** 2)),
+                "velocity_error": -0.5 * (vx - self.command[0]) ** 2
+                                  -0.15 * (yaw_rate - self.command[2]) ** 2,
+                "height_error": -2.0 * (height_error / 0.05) ** 2,
+                "lateral_velocity": -0.5 * vy ** 2,
+                "vertical_velocity": -0.1 * float(lin_vel_body[2] ** 2),
+                "angular_velocity_xy": -0.05 * float(np.square(ang_vel_body[:2]).sum()),
+                "action_rate": -0.02 * float(np.square(action_delta).mean()),
+                "effort": -0.01 * float(np.square(normalized_efforts).mean()),
+                "body_contact": -5.0 * body_hit,
+                "termination": -self.stage.tracking_termination_weight if terminated else 0.0,
+            }
+            if self.stage.pitch_control:
+                terms.update(self._pitch_terms(roll, pitch_objective_error))
+            if self.stage.straight_tracking:
+                terms.update(self._straight_terms(
+                    vx - self.command[0], yaw_rate - self.command[2], sim.base_lin_vel_world[2],
+                    float((leg_lengths - self.prev_leg_lengths).mean() / self.params.control_dt)))
+            if self.stage.stance_geometry:
+                stance = sim.wheel_stance()
+                stagger = max(0.0, stance["wheel_stagger_m"] - self.stage.wheel_stagger_soft_m)
+                offset = max(0.0, stance["wheel_offset_max_m"] - self.stage.wheel_offset_soft_m)
+                severity = (stagger / 0.08) ** 2 + (offset / 0.10) ** 2
+                quality = float(np.exp(-severity))
+                # A static diagonal prop must not collect full task rewards.
+                # No joint target or action direction is prescribed.
+                for key in ("upright", "track_vx", "track_yaw", "track_height"):
+                    terms[key] *= quality
+                if self.stage.straight_tracking:
+                    terms["track_vx_coarse"] *= quality
+                if self.stage.pitch_control:
+                    terms["pitch_alignment"] *= quality
+                terms["stance_geometry"] = -min(6.0, severity)
+                terms["effort"] *= 5.0
+            if self.stage.precision_control:
+                terms.update(self._precision_terms(control))
+            if self.stage.robust_support:
+                p = precision_rewards_for_stage(self.stage, self.params)
+                if not self.command_active and not self.stage.braking_tracking:
+                    position = max(0.0, float(np.linalg.norm(sim.base_pos[:2] - self.hold_xy)) - p.hold_position_deadband_m)
+                    station_quality = float(np.exp(-(position / p.hold_task_position_scale_m) ** 2
+                                                   - (self._heading_error() / p.hold_task_heading_scale_rad) ** 2))
+                    # Zero speed without holding position/heading is incomplete tracking.
+                    terms["track_vx"] *= station_quality
+                    terms["track_yaw"] *= station_quality
+                    if self.stage.straight_tracking:
+                        terms["track_vx_coarse"] *= station_quality
+                difference = max(0.0, abs(self._support_diag["leg_drop_difference_m"]) - p.leg_drop_deadband_m)
+                terms["leg_drop_difference"] = -p.leg_drop_difference * float(self._robust_square(difference / p.leg_drop_scale_m))
+                terms["leg_differential_velocity"] = -p.leg_differential_velocity * float(self._robust_square(
+                    self._support_diag["leg_differential_velocity_m_s"] / p.leg_differential_velocity_scale_m_s))
+                terms["wheel_support"] = -p.missing_wheel_support * float(2.0 - np.sum(wheel_hit))
+                terms["stand_vertical_velocity"] = (-p.stand_vertical_velocity * float(self._robust_square(
+                    lin_vel_body[2] / p.stand_vertical_velocity_scale_m_s)) if not self.command_active else 0.0)
+            if self.stage.symmetric_support:
+                terms.update(self._symmetry_terms(leg_lengths, self._support_diag["wheel_fore_aft_left_m"],
+                                                  self._support_diag["wheel_fore_aft_right_m"], roll))
+            if self.stage.transition_tracking:
+                terms.update(self._transition_terms(height_error, vx - self.command[0], ang_vel_body[1]))
+            if self.stage.coordinated_tracking:
+                p = precision_rewards_for_stage(self.stage, self.params)
+                quality = self._tracking_pose_quality(height_error, pitch_objective_error)
+                self._tracking_quality = quality
+                # Separate pose cost preserves the original speed incentive,
+                # including away from the desired height/pitch during recovery.
+                terms["tracking_pose_cost"] = -p.tracking_pose_cost_weight * (1-quality)
+                terms["height_error_dense"] = -p.height_error_dense * float(self._robust_square(
+                    height_error / p.height_error_scale_m))
+            if self.stage.compact_support:
+                terms.update(self._leg_reach_terms(self._support_diag))
+            if self.stage.centered_support:
+                terms.update(self._centered_support_terms(self._support_diag))
+            if self.stage.aligned_support:
+                terms.update(self._aligned_support_terms(self._support_diag, control))
+            return float(sum(terms.values())), terms
 
         # ==================================================================
         # 官方奖励（阶段开关 official_rewards=True 时只走这条路）
@@ -829,8 +1406,8 @@ class UZ05Env(gym.Env):
         # Chassis/gimbal support is a fall, even when the wheels keep the base
         # just inside the angular limit. Require a few consecutive frames to
         # ignore one-step contact solver noise.
-        if self.stage.name == "stand":
-            _, _, body_hit, _ = sim.contact_state()
+        if self.stage.name == "stand" or self.stage.continuous_position:
+            _, _, body_hit, _ = sim.contact_state(terrain_only=self.stage.robust_support)
             self.body_contact_exceed_steps = (
                 self.body_contact_exceed_steps + 1 if body_hit > 0.5 else 0
             )
@@ -838,6 +1415,17 @@ class UZ05Env(gym.Env):
                 reasons.append("body_contact")
         else:
             self.body_contact_exceed_steps = 0
+
+        if self.stage.stance_geometry:
+            stance = sim.wheel_stance()
+            invalid = (stance["wheel_stagger_m"] > self.stage.wheel_stagger_limit_m
+                       or stance["wheel_offset_max_m"] > self.stage.wheel_offset_limit_m)
+            self.stance_invalid_steps = (
+                self.stance_invalid_steps + 1
+                if invalid and self.steps > self.stage.stance_reset_grace_steps else 0
+            )
+            if self.stance_invalid_steps >= self.stage.stance_invalid_hold_steps:
+                reasons.append("wheel_stance_limit")
 
         yaw_error = self._heading_error(float(rpy[2]))
         if self.stage.name == "stand" and abs(yaw_error) > self.yaw_limit:
@@ -847,10 +1435,10 @@ class UZ05Env(gym.Env):
             reasons.append("height_limit")
 
         station_abs = float(abs(sim.data.qpos[0] - self.nominal_xy[0]))
-        if not self.command_active and station_abs > self.params.station_hard_limit:
+        if not self.stage.continuous_position and not self.command_active and station_abs > self.params.station_hard_limit:
             reasons.append("station_limit")
         drift = float(np.linalg.norm(sim.data.qpos[:2] - self.nominal_xy))
-        if drift > self.params.terminate_on_drift:
+        if not self.stage.continuous_position and drift > self.params.terminate_on_drift:
             reasons.append("drift_limit")
 
         lin_vel_body = sim.body_frame(sim.base_lin_vel_world)

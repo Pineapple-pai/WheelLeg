@@ -163,3 +163,9 @@ docs/html
 /artifacts/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
 /runs/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
 /checkpoints/pure_ppo_stand_leg_scale_035_drift_weight_5x_v1/
+
+# Generated joint tracking PPO checkpoints and TensorBoard events.
+/checkpoints/
+/runs/
+/logs/
+/diagnostics/

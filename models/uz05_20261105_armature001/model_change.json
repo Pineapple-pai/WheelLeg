@@ -1,0 +1,22 @@
+{
+  "source_model": "models/uz05_20261104/uz05_rl.xml",
+  "source_sha256": "2056cd5704b33708e9cd4e185db236ff92e8928612a572a478942034199f34f8",
+  "model_sha256": "2d68efa0826d6d245d66f4abea1ed8fa1acfe4cfc4e2ec5183ccae520366d595",
+  "physical_change": "Only left/right wheel joint armature0.01->0.001kg*m^2; all other plant parameters unchanged.",
+  "status": "User-selected provisional output-side equivalent inertia; not calibrated or claimed manufacturer value.",
+  "shared_mesh_dir": "../uz05_20261104/meshes/stl",
+  "gear_ratio": 15.764705882352942,
+  "gear_ratio_status": "Existing project/firmware value retained; user image alone cannot identify tooth counts.",
+  "estimate_only": {
+    "stock_time_constant_s": 0.049,
+    "stock_speed_torque_slope_rpm_per_nm": 72,
+    "stock_gear_ratio": 19.203208556149733,
+    "stock_equivalent_inertia_under_linear_motor_assumptions_kgm2": 0.00649882684291906,
+    "custom_ratio_rescaling_if_all_inertia_scaled_identically_kgm2": 0.004379848755452794,
+    "caveat": "Inferred stock assembly estimate, not measured bare-rotor inertia; custom gear inertias and control/test definitions unknown. Do not use as exact identification."
+  },
+  "references": [
+    "https://rm-static.djicdn.com/robomasters/public/document/RoboMaster%20M3508%20P19%20Brushless%20DC%20Gear%20Motor%20V1.0.pdf",
+    "https://mujoco.readthedocs.io/en/3.3.6/XMLreference.html#body-joint-armature"
+  ]
+}

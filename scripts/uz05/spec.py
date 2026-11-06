@@ -4,7 +4,7 @@
 --------
 1. actor 与 critic 观测分开定义：actor 输入带传感器噪声的当前估计量，critic 另有
    仿真特权量。观测布局由 ``observations.py`` 按这里的单一事实来源严格校验。
-2. **动作恒为 6 维**：两路轮速目标和四路腿关节位置偏置。
+2. **动作恒为 6 维**：两路轮速目标和四路关节位置；联合模式使用周期绝对位置。
 3. **机器人轴定义为机体系**（x 前 / y 左 / z 上）；观测来源与实机信号等价性仍需
    逐块验证，不能只根据名称推断。
 4. 奖励项由阶段配置和奖励权重控制；官方奖励分支会直接返回，不使用自定义奖励组。
@@ -20,22 +20,55 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+import math
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 # --------------------------------------------------------------------------
 # 路径
 # --------------------------------------------------------------------------
 REPO_ROOT = Path(__file__).resolve().parents[2]
-MODEL_XML = REPO_ROOT / "uz05_修正后(3).xml"
+ORIGINAL_MODEL_XML = REPO_ROOT / "models" / "uz05_20261104" / "uz05_rl.xml"
+DEFAULT_MODEL_XML = REPO_ROOT / "models" / "uz05_20261105_armature001" / "uz05_rl.xml"
+# Resolved before worker imports, so spawned training environments use the same model.
+# Keep the legacy XML immutable for historical checkpoint reproduction.
+MODEL_XML = Path(os.environ.get("UZ05_MODEL_XML", str(DEFAULT_MODEL_XML))).expanduser().resolve()
 MESH_DIR = Path(os.environ.get(
-    "UZ05_MESH_DIR", str(REPO_ROOT / "model_source" / "uz05" / "mjcf_meshes")
+    "UZ05_MESH_DIR", str(ORIGINAL_MODEL_XML.parent / "meshes" / "stl")
 )).expanduser()
 
 # --------------------------------------------------------------------------
 # 能力（按训练顺序）
 # --------------------------------------------------------------------------
 CAPABILITY_ORDER = (
+    "joint_tracking_startup_precision_fine",  # PPO-only tighter velocity objective
+    "joint_tracking_startup_precision",  # 基础阶段：单项收紧速度误差尺度
+    "joint_tracking_startup",  # 新模型：先学固定高度的站立与低速起步
+    "joint_tracking_simple",
+    "joint_tracking_simple_axle",
+    "joint_tracking_simple_support",
+    "joint_tracking_simple_support_axle",
+    "joint_tracking_simple_tight_axle",
+    "joint_tracking_simple_tight_survival",
+    "joint_tracking_simple_responsive",
+    "joint_tracking_simple_responsive_survival",
+    "joint_tracking_simple_recovery",
+    "joint_tracking_v16",  # 真实轮轴同轴、车身与整机支撑倾角协调
+    "joint_tracking_v15",  # 每条腿独立的前后支撑位置软目标
+    "joint_tracking_v14",  # 高频高速切换、实际腿长一致性与精细速度误差
+    "joint_tracking_v13",  # 高速停车与固定有界漂移成本
+    "joint_tracking_v12",  # 高速制动/后退恢复分布、直行航向及更紧凑连杆
+    "joint_tracking_v11",  # 连杆伸出范围、近水平 pitch 与实际支撑对称
+    "joint_tracking_v10",  # 速度与姿态联合目标、直接换向与更长收益视野
+    "joint_tracking_v9",  # 直行航向反馈、宽误差跟踪与运动姿态稳定
+    "joint_tracking_v8",  # ±2m/s、扩展高度与切换响应
+    "joint_tracking_v7",  # 实际腿长、前后构型与 roll 软目标
+    "joint_tracking_v6",  # pitch 近零目标与低噪声高频输出约束
+    "joint_tracking_v5",  # 双腿稳定、长命令与固定扰动训练
+    "joint_tracking_v4",  # 平衡/跟踪优先的固定权重
+    "joint_tracking_v3",  # 零命令锚点、输出变化与饱和目标
+    "joint_tracking_v2",  # 加入轮腿支撑几何要求
+    "joint_tracking",  # 从零同时学习高度/vx/yaw，无课程
     "stand",       # 站立
     "low_speed",   # 低速平移
     "high_speed",  # 高速平移
@@ -53,6 +86,53 @@ class StageSpec:
     """一个 capability 阶段的完整训练设定。"""
 
     name: str
+    continuous_position: bool = False
+    stance_geometry: bool = False
+    precision_control: bool = False
+    rebalanced_control: bool = False
+    robust_support: bool = False
+    pitch_control: bool = False
+    symmetric_support: bool = False
+    transition_tracking: bool = False
+    straight_tracking: bool = False
+    coordinated_tracking: bool = False
+    compact_support: bool = False
+    responsive_tracking: bool = False
+    braking_tracking: bool = False
+    switching_tracking: bool = False
+    centered_support: bool = False
+    aligned_support: bool = False
+    simple_reward: bool = False
+    simple_pitch_reference: str = "zero"
+    simple_axle_cost: bool = False
+    simple_reward_profile: str = "baseline"
+    recovery_sampling: bool = False
+    moving_start_probability: float = 0.0
+    moving_start_speed_range: tuple[float, float] = (0.4, 2.0)
+    translation_reverse_probability: float = 0.5
+    velocity_band_fractions: tuple[float, ...] = (0.0, 0.20, 0.50, 1.0)
+    velocity_band_probabilities: tuple[float, ...] = (0.25, 0.40, 0.35)
+    ppo_gamma: float = 0.99
+    ppo_gae_lambda: float = 0.95
+    wheel_velocity_scale_rad_s: float = 16.0
+    wheel_action_std_init: float | None = None
+    motor_substep_control: bool = False
+    long_command_prob: float = 0.0
+    long_command_hold_steps: tuple[int, int] = (1500, 3000)
+    tracking_upright_weight: float = 2.0
+    tracking_vx_weight: float = 2.0
+    tracking_vx_sigma: float = 0.25
+    tracking_yaw_weight: float = 1.5
+    tracking_height_weight: float = 2.0
+    tracking_termination_weight: float = 20.0
+    zero_command_hold_steps: tuple[int, int] = (500, 1500)
+    wheel_stagger_soft_m: float = 0.04
+    wheel_offset_soft_m: float = 0.08
+    wheel_stagger_limit_m: float = 0.15
+    wheel_offset_limit_m: float = 0.20
+    stance_invalid_hold_steps: int = 25
+    stance_reset_grace_steps: int = 50
+    command_hold_steps: tuple[int, int] = (250, 625)
     # 命令范围
     vx_range: tuple[float, float] = (0.0, 0.0)
     vy_range: tuple[float, float] = (0.0, 0.0)
@@ -84,6 +164,13 @@ class StageSpec:
 
 # 训练课程：每一级都包含前面全部能力（累积）
 STAGES: tuple[StageSpec, ...] = (
+    StageSpec(
+        name="joint_tracking", continuous_position=True, official_rewards=False,
+        vx_range=(-0.5, 0.5), yaw_range=(-1.5, 1.5),
+        base_height_range=(0.24, 0.30), zero_command_prob=0.25,
+        init_tilt=0.04, init_tilt_rate=0.05, init_vel=0.04,
+        tilt_limit=0.60, tilt_limit_hold_steps=3, episode_steps=1500,
+    ),
     StageSpec(
         name="stand",
         # 站立要优化站位、绝对航向和动作平滑，使用下方站立专用 shaping。
@@ -174,6 +261,61 @@ STAGES: tuple[StageSpec, ...] = (
     ),
 )
 
+# Separate objective version: keep v1 playback and checkpoints reproducible.
+STAGES = (replace(STAGES[0], name="joint_tracking_v2", stance_geometry=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v3", precision_control=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v4", rebalanced_control=True,
+                  tracking_upright_weight=3.0, tracking_vx_weight=2.5,
+                  tracking_yaw_weight=2.0, tracking_termination_weight=30.0),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v5", robust_support=True, motor_substep_control=True,
+                  long_command_prob=0.5, zero_command_hold_steps=(1500, 3000),
+                  episode_steps=3000, init_tilt=0.07, init_tilt_rate=0.12, init_vel=0.08),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v6", pitch_control=True,
+                  tracking_vx_sigma=0.15),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v7", symmetric_support=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v8", transition_tracking=True,
+                  wheel_velocity_scale_rad_s=48.0, wheel_action_std_init=0.02,
+                  vx_range=(-2.0, 2.0), base_height_range=(0.22, 0.32),
+                  long_command_prob=0.4, command_hold_steps=(125, 500),
+                  zero_command_hold_steps=(250, 750)),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v9", straight_tracking=True,
+                  tracking_vx_weight=3.5, tracking_vx_sigma=0.20,
+                  long_command_prob=0.5),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v10", coordinated_tracking=True,
+                  ppo_gamma=0.997, ppo_gae_lambda=0.97),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v11", compact_support=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v12", responsive_tracking=True,
+                  moving_start_probability=0.35, translation_reverse_probability=0.6,
+                  velocity_band_fractions=(0.0,0.20,0.50,0.75,1.0),
+                  velocity_band_probabilities=(0.20,0.25,0.25,0.30),
+                  command_hold_steps=(250,625)),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v13", braking_tracking=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v14", switching_tracking=True,
+                  long_command_prob=0.20, long_command_hold_steps=(750,1250),
+                  command_hold_steps=(375,625), zero_command_hold_steps=(500,1000)),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v15", centered_support=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_v16", aligned_support=True),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_startup",
+                  vx_range=(-0.5, 0.5), yaw_range=(0.0, 0.0),
+                  base_height_range=(0.27, 0.27), moving_start_probability=0.0),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_startup_precision"),) + STAGES
+STAGES = (replace(STAGES[0], name="joint_tracking_startup_precision_fine"),) + STAGES
+_simple_base = next(stage for stage in STAGES if stage.name == "joint_tracking_v15")
+STAGES = tuple(replace(_simple_base, name=name, simple_reward=True,
+                       simple_pitch_reference=reference, simple_axle_cost=axle)
+               for name, reference, axle in (
+                   ("joint_tracking_simple", "zero", False),
+                   ("joint_tracking_simple_axle", "zero", True),
+                   ("joint_tracking_simple_support", "support", False),
+                   ("joint_tracking_simple_support_axle", "support", True))) + STAGES
+_tight_base = next(stage for stage in STAGES if stage.name == "joint_tracking_simple_support_axle")
+STAGES = (replace(_tight_base,name="joint_tracking_simple_tight_axle",simple_reward_profile="tight"),
+          replace(_tight_base,name="joint_tracking_simple_tight_survival",simple_reward_profile="tight_survival")) + STAGES
+STAGES = (replace(_tight_base,name="joint_tracking_simple_responsive",simple_reward_profile="responsive"),) + STAGES
+STAGES = (replace(_tight_base,name="joint_tracking_simple_responsive_survival",simple_reward_profile="responsive_survival"),) + STAGES
+STAGES = (replace(_tight_base,name="joint_tracking_simple_recovery",simple_reward_profile="responsive",
+                  recovery_sampling=True, velocity_band_probabilities=(.15,.20,.20,.45),
+                  long_command_prob=.10),) + STAGES
 STAGE_BY_NAME = {stage.name: stage for stage in STAGES}
 DEFAULT_STAGE = "stand"
 
@@ -340,7 +482,8 @@ def observation_noise_vector(noise: "ObservationNoise") -> dict[str, object]:
         "base_lin_vel": noise.lin_vel * noise.level * scale("base_lin_vel"),
         "base_height_rel": noise.height_measurements * noise.level * scale("base_height_rel"),
         "base_pos_rel": noise.position * noise.level * scale("base_pos_rel"),
-        "terrain_preview": noise.height_measurements * noise.level * scale("terrain_preview"),
+        "terrain_preview": (noise.height_measurements if noise.terrain_height_measurements is None
+                            else noise.terrain_height_measurements) * noise.level * scale("terrain_preview"),
         "leg_joint_pos": noise.dof_pos * noise.level * scale("leg_joint_pos"),
         "leg_joint_vel": noise.dof_vel * noise.level * scale("leg_joint_vel"),
         "wheel_joint_vel": noise.dof_vel * noise.level * scale("wheel_joint_vel"),
@@ -363,6 +506,18 @@ ACTION_SPEC: tuple[tuple[str, int, float], ...] = (
     ("hip_position_offset", 4, 0.35),   # rad   —— 4 个主动关节位置偏置（官方 pos_action_scale = 0.35）
 )
 ACTION_DIM = sum(width for _, width, _ in ACTION_SPEC)
+JOINT_TRACKING_ACTION_SPEC = (
+    ("wheel_velocity_left_right", 2, 16.0),
+    ("joint_circular_position", 4, math.pi),
+)
+
+
+def action_spec_for_stage(stage: str | StageSpec):
+    stage = STAGE_BY_NAME[stage] if isinstance(stage, str) else stage
+    if stage.continuous_position:
+        return (("wheel_velocity_left_right", 2, stage.wheel_velocity_scale_rad_s),
+                JOINT_TRACKING_ACTION_SPEC[1])
+    return ACTION_SPEC
 
 # --------------------------------------------------------------------------
 # 奖励组（全部实现，权重为 0 即关闭）
@@ -470,6 +625,8 @@ class RobotParams:
     hip_joint_limit: float = 1.2            # 髋关节机械行程 ±1.2 rad [待实测替换]
     tendon_limit: float = 0.388             # MJCF tendon 上限
     reset_height: float = 0.268          # 贴近平衡高度，减小落地瞬态漂移
+    closed_chain_reset: bool = True     # False reproduces legacy inconsistent reset for A/B
+    reset_projection_attempts: int = 8
     nominal_stand_height: float = 0.2645  # 实测平衡稳态高度
     nominal_leg_length: float = 0.2098    # 实测平衡稳态腿长（tendon 口径）
     control_substeps: int = 4
@@ -696,13 +853,311 @@ class ObservationNoise:
     dof_vel: float = 1.5
     lin_vel: float = 0.1
     height_measurements: float = 0.1
+    terrain_height_measurements: float | None = None
     position: float = 0.01
     clip_observations: float = 100.0
 
 
 @dataclass
+class PrecisionRewards:
+    """Fixed v3 objective parameters; no schedules or command/controller overrides."""
+    hold_position: float = 1.5
+    hold_position_deadband_m: float = 0.01
+    hold_position_scale_m: float = 0.05
+    hold_heading: float = 0.4
+    hold_heading_scale_rad: float = math.radians(5.0)
+    wheel_target_change: float = 0.12
+    wheel_target_change_scale_rad_s: float = 2.0
+    joint_target_change: float = 0.08
+    joint_target_change_scale_rad: float = 0.08
+    effort: float = 0.15
+    effort_change: float = 0.10
+    saturation: float = 0.20
+    saturation_soft_fraction: float = 0.80
+    saturation_scale_fraction: float = 0.20
+
+
+@dataclass
+class RebalancedPrecisionRewards(PrecisionRewards):
+    """v4 fixed coefficients: retain all objectives, allow balance corrections."""
+    hold_position: float = 0.8
+    hold_heading: float = 0.25
+    wheel_target_change: float = 0.04
+    joint_target_change: float = 0.015
+    effort: float = 0.05
+    effort_change: float = 0.025
+    saturation: float = 0.03
+
+
+@dataclass
+class SupportPrecisionRewards(RebalancedPrecisionRewards):
+    """Fixed flat-ground support objectives; no joint angle prescription."""
+    hold_position: float = 1.0
+    hold_heading: float = 0.35
+    hold_task_position_scale_m: float = 0.10
+    hold_task_heading_scale_rad: float = 0.20
+    leg_drop_difference: float = 0.25
+    leg_drop_deadband_m: float = 0.01
+    leg_drop_scale_m: float = 0.025
+    leg_differential_velocity: float = 0.08
+    leg_differential_velocity_scale_m_s: float = 0.20
+    stand_vertical_velocity: float = 0.08
+    stand_vertical_velocity_scale_m_s: float = 0.15
+    missing_wheel_support: float = 0.35
+
+
+@dataclass
+class RobustTrainingParams:
+    pushes_enabled: bool = False
+    push_interval_steps: tuple[int, int] = (375, 750)
+    push_duration_steps: tuple[int, int] = (10, 20)
+    push_force_n: tuple[float, float] = (5.0, 15.0)
+
+
+@dataclass
+class PitchPrecisionRewards(SupportPrecisionRewards):
+    """Smooth fixed posture/output objectives, including during recovery."""
+    pitch_sigma_rad: float = math.radians(5.0)
+    roll_sigma_rad: float = math.radians(12.0)
+    pitch_deadband_rad: float = math.radians(3.0)
+    pitch_error_scale_rad: float = math.radians(7.0)
+    pitch_error: float = 0.4
+    wheel_target_change: float = 0.08
+    joint_target_change: float = 0.03
+    wheel_acceleration: float = 0.02
+    wheel_acceleration_scale_rad_s2: float = 150.0
+
+
+@dataclass
+class SymmetryPrecisionRewards(PitchPrecisionRewards):
+    """Fixed geometry costs; all six policy actions remain independent."""
+    leg_length_difference: float = 0.35
+    leg_length_deadband_m: float = 0.003
+    leg_length_scale_m: float = 0.010
+    fore_aft_difference: float = 0.25
+    fore_aft_deadband_m: float = 0.005
+    fore_aft_scale_m: float = 0.020
+    roll_sigma_rad: float = math.radians(5.0)
+    roll_error: float = 0.25
+    roll_deadband_rad: float = math.radians(1.0)
+    roll_error_scale_rad: float = math.radians(4.0)
+    leg_drop_deadband_m: float = 0.003
+    leg_drop_scale_m: float = 0.015
+
+
+@dataclass
+class TransitionPrecisionRewards(SymmetryPrecisionRewards):
+    height_shortfall: float = 0.5
+    height_shortfall_deadband_m: float = 0.003
+    height_shortfall_scale_m: float = 0.015
+    vx_error_dense: float = 0.15
+    vx_error_scale_m_s: float = 0.30
+    pitch_rate: float = 0.04
+    pitch_rate_scale_rad_s: float = 1.0
+
+
+@dataclass
+class StraightPrecisionRewards(TransitionPrecisionRewards):
+    """Fixed v9 objectives; heading is a measured error, never a controller."""
+    vx_error_dense: float = 0.8
+    vx_coarse_bonus: float = 1.5
+    vx_coarse_sigma_m_s: float = 0.7
+    yaw_error_dense: float = 0.35
+    yaw_error_scale_rad_s: float = 0.25
+    straight_heading: float = 0.6
+    straight_heading_scale_rad: float = math.radians(5.0)
+    pitch_rate: float = 0.08
+    motion_vertical_velocity: float = 0.08
+    motion_vertical_velocity_scale_m_s: float = 0.15
+    leg_common_velocity: float = 0.04
+    leg_common_velocity_scale_m_s: float = 0.20
+
+
+@dataclass
+class CoordinatedPrecisionRewards(StraightPrecisionRewards):
+    """Fixed v10 soft costs; preserve the v9 speed reward signal."""
+    tracking_pose_floor: float = 0.30
+    tracking_height_sigma_m: float = 0.015
+    tracking_pitch_sigma_rad: float = math.radians(7.0)
+    tracking_pose_cost_weight: float = 5.0
+    height_error_dense: float = 0.4
+    height_error_scale_m: float = 0.01
+    height_shortfall: float = 1.0
+    height_shortfall_scale_m: float = 0.01
+    reversal_command_probability: float = 0.25
+
+
+@dataclass
+class CompactPrecisionRewards(CoordinatedPrecisionRewards):
+    """Fixed physical reach and posture costs; no joint-angle prescription."""
+    leg_forward_reach_soft_m: float = 0.13
+    leg_backward_reach_soft_m: float = 0.27
+    leg_reach_scale_m: float = 0.04
+    leg_reach_cost: float = 0.4
+    pitch_deadband_rad: float = math.radians(1.0)
+    pitch_error_scale_rad: float = math.radians(3.0)
+    pitch_error: float = 0.8
+    leg_length_deadband_m: float = 0.002
+    leg_length_scale_m: float = 0.005
+    leg_length_difference: float = 0.5
+    roll_sigma_rad: float = math.radians(3.0)
+    roll_deadband_rad: float = math.radians(0.5)
+    roll_error_scale_rad: float = math.radians(2.0)
+    roll_error: float = 0.4
+    height_error_dense: float = 0.6
+    height_error_scale_m: float = 0.008
+
+
+@dataclass
+class ResponsivePrecisionRewards(CompactPrecisionRewards):
+    """Fixed v12 error costs; no command ramp or feedback action override."""
+    straight_heading: float = 1.0
+    straight_heading_scale_rad: float = math.radians(3.0)
+    yaw_error_dense: float = 0.5
+    yaw_error_scale_rad_s: float = 0.20
+    hold_heading: float = 0.5
+    hold_heading_scale_rad: float = math.radians(3.0)
+    vx_error_dense: float = 1.0
+    leg_forward_reach_soft_m: float = 0.115
+    leg_reach_scale_m: float = 0.03
+    leg_length_difference: float = 0.6
+    leg_length_scale_m: float = 0.004
+    reversal_command_probability: float = 0.35
+
+
+@dataclass
+class BrakingPrecisionRewards(ResponsivePrecisionRewards):
+    """Fixed bounded station cost, independent stopping reward and geometry costs."""
+    stop_command_probability: float = 0.25
+    hold_position_cost_cap: float = 4.0
+    vx_error_dense: float = 1.4
+    vx_coarse_sigma_m_s: float = 0.5
+    leg_length_difference: float = 0.8
+    leg_reach_cost: float = 0.6
+
+
+@dataclass
+class SwitchingPrecisionRewards(BrakingPrecisionRewards):
+    """Fixed transition mixture and stronger full-range velocity errors."""
+    # Mutually exclusive events on a preceding pure translation command.
+    stop_command_probability: float = 0.20
+    reversal_command_probability: float = 0.40
+    reversal_mid_speed_probability: float = 0.50
+    reversal_mid_speed_range_m_s: tuple[float, float] = (0.8, 1.2)
+    height_command_probability: float = 0.15
+    turn_command_probability: float = 0.10
+    # Four times v13 local curvature; twice its large-error slope.
+    vx_error_dense: float = 1.4
+    vx_error_scale_m_s: float = 0.15
+    leg_length_deadband_m: float = 0.001
+    leg_length_scale_m: float = 0.003
+    leg_length_difference: float = 1.2
+    roll_error: float = 0.6
+
+
+@dataclass
+class CenteredSupportRewards(SwitchingPrecisionRewards):
+    """Independent hip-to-wheel fore/aft costs detect common-mode leg swing."""
+    wheel_fore_aft_deadband_m: float = 0.03
+    wheel_fore_aft_scale_m: float = 0.04
+    wheel_fore_aft_alignment: float = 1.0
+
+
+@dataclass
+class AlignedSupportRewards(CenteredSupportRewards):
+    """Physical axle alignment and weak, circular command coordination."""
+    axle_offset_deadband_m: float = 0.002
+    axle_offset_scale_m: float = 0.010
+    axle_alignment: float = 1.0
+    paired_target_deadband_rad: float = math.radians(2.0)
+    paired_target_scale_rad: float = math.radians(8.0)
+    paired_target_alignment: float = 0.2
+
+
+@dataclass
+class StartupPrecisionRewards(AlignedSupportRewards):
+    """Only tighten the existing dense velocity-error scale, including zero."""
+    vx_error_scale_m_s: float = 0.05
+
+
+@dataclass
+class FineStartupPrecisionRewards(StartupPrecisionRewards):
+    """PPO reward only: stronger penalty on actual velocity error, no action targets."""
+    vx_error_scale_m_s: float = 0.01
+
+
+@dataclass
+class SimpleTrackingRewards:
+    """Frozen experimental baseline v1; all continuous terms are per-second rates."""
+    schema: str = "simple_tracking_v1"
+    vx_scale_m_s: float = 0.30
+    yaw_rate_scale_rad_s: float = 0.50
+    height_scale_m: float = 0.025
+    stop_position_scale_m: float = 0.10
+    roll_scale_rad: float = math.radians(5)
+    pitch_scale_rad: float = math.radians(7)
+    heading_scale_rad: float = math.radians(5)
+    action_delta_scale: float = 0.10
+    smoothness_weight: float = 0.05
+    failure_cost: float = 5.0
+    axle_deadband_m: float = 0.002
+    axle_scale_m: float = 0.010
+    axle_weight: float = 1.0
+
+
+@dataclass
+class TightTrackingRewards(SimpleTrackingRewards):
+    """Six times local curvature, unchanged large-error velocity slope."""
+    schema: str = "simple_tracking_tight_v1"
+    vx_scale_m_s: float = 0.05
+    vx_weight: float = 1.0/6.0
+
+
+@dataclass
+class TightSurvivalRewards(TightTrackingRewards):
+    schema: str = "simple_tracking_tight_survival_v1"
+    failure_cost: float = 20.0
+
+
+@dataclass
+class ResponsiveSimpleRewards(TightSurvivalRewards):
+    """Single-factor velocity-priority trial; retain the same five reward groups."""
+    schema: str = "simple_tracking_responsive_v1"
+    vx_weight: float = 1.0/3.0
+
+
+@dataclass
+class ResponsiveSurvivalRewards(ResponsiveSimpleRewards):
+    """Failure-cost-only trial against the velocity-priority candidate."""
+    schema: str = "simple_tracking_responsive_survival_v1"
+    failure_cost: float = 30.0
+
+
+@dataclass
 class EnvParams:
     robot: RobotParams = field(default_factory=RobotParams)
+    precision: PrecisionRewards = field(default_factory=PrecisionRewards)
+    precision_balanced: RebalancedPrecisionRewards = field(default_factory=RebalancedPrecisionRewards)
+    precision_support: SupportPrecisionRewards = field(default_factory=SupportPrecisionRewards)
+    precision_pitch: PitchPrecisionRewards = field(default_factory=PitchPrecisionRewards)
+    precision_symmetry: SymmetryPrecisionRewards = field(default_factory=SymmetryPrecisionRewards)
+    precision_transition: TransitionPrecisionRewards = field(default_factory=TransitionPrecisionRewards)
+    precision_straight: StraightPrecisionRewards = field(default_factory=StraightPrecisionRewards)
+    precision_coordinated: CoordinatedPrecisionRewards = field(default_factory=CoordinatedPrecisionRewards)
+    precision_compact: CompactPrecisionRewards = field(default_factory=CompactPrecisionRewards)
+    precision_responsive: ResponsivePrecisionRewards = field(default_factory=ResponsivePrecisionRewards)
+    precision_braking: BrakingPrecisionRewards = field(default_factory=BrakingPrecisionRewards)
+    precision_switching: SwitchingPrecisionRewards = field(default_factory=SwitchingPrecisionRewards)
+    precision_centered: CenteredSupportRewards = field(default_factory=CenteredSupportRewards)
+    precision_aligned: AlignedSupportRewards = field(default_factory=AlignedSupportRewards)
+    precision_startup: StartupPrecisionRewards = field(default_factory=StartupPrecisionRewards)
+    precision_startup_fine: FineStartupPrecisionRewards = field(default_factory=FineStartupPrecisionRewards)
+    simple_tracking: SimpleTrackingRewards = field(default_factory=SimpleTrackingRewards)
+    simple_tight: TightTrackingRewards = field(default_factory=TightTrackingRewards)
+    simple_tight_survival: TightSurvivalRewards = field(default_factory=TightSurvivalRewards)
+    simple_responsive: ResponsiveSimpleRewards = field(default_factory=ResponsiveSimpleRewards)
+    simple_responsive_survival: ResponsiveSurvivalRewards = field(default_factory=ResponsiveSurvivalRewards)
+    robust: RobustTrainingParams = field(default_factory=RobustTrainingParams)
     joint: JointActuatorParams = field(default_factory=JointActuatorParams)
     wheel: WheelEscParams = field(default_factory=WheelEscParams)
     rewards: RewardWeights = field(default_factory=RewardWeights)
@@ -721,3 +1176,76 @@ def active_rewards(stage: StageSpec) -> dict[str, bool]:
     """把阶段的奖励组展开成 ``{组名: 是否启用}``。"""
     enabled = set(stage.reward_groups)
     return {group: (group in enabled) for group in REWARD_GROUPS}
+
+
+def precision_rewards_for_stage(stage: StageSpec, params: EnvParams) -> PrecisionRewards:
+    if stage.simple_reward:
+        if stage.simple_reward_profile == "responsive_survival":
+            return params.simple_responsive_survival
+        if stage.simple_reward_profile == "responsive":
+            return params.simple_responsive
+        if stage.simple_reward_profile == "tight":
+            return params.simple_tight
+        if stage.simple_reward_profile == "tight_survival":
+            return params.simple_tight_survival
+        return params.simple_tracking
+    if stage.name == "joint_tracking_startup_precision_fine":
+        return params.precision_startup_fine
+    if stage.name == "joint_tracking_startup_precision":
+        return params.precision_startup
+    if stage.aligned_support:
+        return params.precision_aligned
+    if stage.centered_support:
+        return params.precision_centered
+    if stage.switching_tracking:
+        return params.precision_switching
+    if stage.braking_tracking:
+        return params.precision_braking
+    if stage.responsive_tracking:
+        return params.precision_responsive
+    if stage.compact_support:
+        return params.precision_compact
+    if stage.coordinated_tracking:
+        return params.precision_coordinated
+    if stage.straight_tracking:
+        return params.precision_straight
+    if stage.transition_tracking:
+        return params.precision_transition
+    if stage.symmetric_support:
+        return params.precision_symmetry
+    if stage.pitch_control:
+        return params.precision_pitch
+    if stage.robust_support:
+        return params.precision_support
+    return params.precision_balanced if stage.rebalanced_control else params.precision
+
+
+def env_params_for_stage(stage: str | StageSpec) -> EnvParams:
+    stage = STAGE_BY_NAME[stage] if isinstance(stage, str) else stage
+    params = EnvParams()
+    if stage.robust_support:
+        # Keep both wheel collision cylinders clear of the ground at reset,
+        # including the bounded initial roll/pitch perturbation.
+        params.robot.reset_height = 0.315
+        params.robust.pushes_enabled = True
+        # Fixed moderate ranges, applied from the first reset. Delay remains zero
+        # because the environment does not implement a delayed actuator channel.
+        params.domain_randomization = DomainRandomization(
+            base_mass_scale=(0.95, 1.10), base_inertia_scale=(0.90, 1.10),
+            base_com_offset_m=(0.008, 0.008), base_com_offset_z_m=0.005,
+            wheel_friction_scale=(0.85, 1.15), joint_damping_scale=(0.90, 1.10),
+            joint_kp_scale=(0.95, 1.05), joint_kd_scale=(0.95, 1.05),
+            wheel_torque_scale=(0.95, 1.05), wheel_speed_gain_scale=(0.95, 1.05),
+            actuator_delay_steps=(0, 0),
+        )
+    if stage.pitch_control:
+        # Proposed fixed sensor ranges, not measurements of real hardware.
+        # Keep noise enabled; stop injecting 5 cm white terrain errors on flat ground.
+        params.noise = ObservationNoise(
+            ang_vel=0.04, gravity=0.01, dof_vel=0.20, lin_vel=0.02,
+            height_measurements=0.01, terrain_height_measurements=0.004,
+            position=0.004,
+        )
+    if stage.name in ("joint_tracking_startup", "joint_tracking_startup_precision", "joint_tracking_startup_precision_fine"):
+        params.robust.pushes_enabled = False
+    return params

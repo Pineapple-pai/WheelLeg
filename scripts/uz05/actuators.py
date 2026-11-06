@@ -17,6 +17,7 @@ import numpy as np
 
 from .spec import (
     ACTION_SPEC,
+    JOINT_TRACKING_ACTION_SPEC,
     JointActuatorParams,
     RobotParams,
     WheelEscParams,
@@ -89,6 +90,9 @@ class ActuatorBank:
     joint: JointPDController = field(default_factory=JointPDController)
     wheel: WheelEscController = field(default_factory=WheelEscController)
 
+    continuous_position: bool = False
+    wheel_velocity_scale_rad_s: float = JOINT_TRACKING_ACTION_SPEC[0][2]
+
     # 最近一步的诊断量
     diagnostics: dict = field(default_factory=dict, init=False)
 
@@ -114,20 +118,32 @@ class ActuatorBank:
     ) -> dict:
         """返回 ``{"leg_ctrl": (4,), "wheel_ctrl": (2,), ...}`` 诊断字典。
 
-        关节指令 = **固定零位** + 动作偏置（不能写成“当前位姿 + 偏置”，否则
-        action=0 时位置误差恒为 0，PD 退化成纯阻尼，腿会直接软掉）。
+        联合模式下关节指令是周期绝对位置；旧模式使用固定零位加位置偏置。
+        两种模式均保留电机位置执行环，策略不输出力矩。
         """
-        # 动作 6 维（对齐开源）：[0:2] 轮速目标，[2:6] 4 个腿关节位置偏置。
-        # 缩放全部来自 spec.ACTION_SPEC（官方 pos_action_scale = 0.35）。
-        q_target = (
-            state["nominal_joint_pos"]
-            + np.asarray(action[2:6], dtype=np.float64) * POS_ACTION_SCALE
-        )
+        if self.continuous_position:
+            # Absolute circular position targets, lifted to the nearest turn.
+            # Crossing +pi/-pi keeps the target continuous; no nominal pose clamp.
+            angle = np.asarray(action[2:6], dtype=np.float64) * JOINT_TRACKING_ACTION_SPEC[1][2]
+            q = np.asarray(state["joint_pos"], dtype=np.float64)
+            delta = np.arctan2(np.sin(angle - q), np.cos(angle - q))
+            q_target = q + delta
+        else:
+            q_target = (
+                state["nominal_joint_pos"]
+                + np.asarray(action[2:6], dtype=np.float64) * POS_ACTION_SCALE
+            )
         qd_target = np.zeros(4, dtype=np.float64)
-        leg_torque = self.joint.torque(q_target, qd_target, state["joint_pos"], state["joint_vel"])
+        leg_torque_demand = (self.joint.params.kp * (q_target - state["joint_pos"])
+                             + self.joint.params.kd * (qd_target - state["joint_vel"]))
+        leg_torque = np.clip(leg_torque_demand, -self.joint.params.torque_limit,
+                             self.joint.params.torque_limit)
 
-        wheel_target = self.decode_wheel_basis(
-            action[0], action[1], WHEEL_COMMON_SCALE, WHEEL_DIFF_SCALE,
+        wheel_target = (
+            np.clip(np.asarray(action[:2], dtype=np.float64), -1.0, 1.0) * self.wheel_velocity_scale_rad_s
+            if self.continuous_position else self.decode_wheel_basis(
+                action[0], action[1], WHEEL_COMMON_SCALE, WHEEL_DIFF_SCALE,
+            )
         )
         # 注意：**不**在零指令时屏蔽策略的轮速目标。
         # 姿态与位置都必须由策略自己学，屏蔽会让策略失去唯一的控制手段。
@@ -146,9 +162,12 @@ class ActuatorBank:
             "wheel_current_right": float(total_current[1]),
             "wheel_torque_left": float(wheel_torque[0]),
             "wheel_torque_right": float(wheel_torque[1]),
+            "joint_target": q_target.copy(),
             "leg_torque_abs_mean": float(np.abs(leg_torque).mean()),
         }
         return {
+            "joint_target": q_target.copy(),
+            "leg_torque_demand": leg_torque_demand,
             "leg_ctrl": leg_torque,
             "wheel_ctrl": self.wheel.motor_command(wheel_torque),
             "leg_torque": leg_torque,
